@@ -38,10 +38,9 @@ DEFAULTS: dict[str, Any] = {
     "include_missing": False,
     "hash_videos": True,
     "pilot_count": 2,
-    "apply": False,
 }
 
-CONFIG_KEYS = frozenset({"roots", *DEFAULTS})
+CONFIG_KEYS = frozenset(DEFAULTS)
 PATH_KEYS = frozenset({"runs_root", "model_cache", "ffmpeg", "hotwords_file"})
 
 
@@ -91,16 +90,12 @@ def build_options(
     config: Mapping[str, Any],
     config_base: Path,
 ) -> PipelineOptions:
-    if arguments.roots:
-        root_values: Any = arguments.roots
-        roots_base = Path.cwd()
-    else:
-        root_values = config.get("roots", [])
-        roots_base = config_base
+    root_values: Any = arguments.roots
+    roots_base = Path.cwd()
     if isinstance(root_values, (str, Path)):
         root_values = [root_values]
     if not isinstance(root_values, list) or not root_values:
-        raise ConfigError("请通过位置参数或配置文件提供至少一个 roots 扫描目录")
+        raise ConfigError("请提供至少一个扫描目录")
     roots = [resolve_path(value, roots_base) for value in root_values]
     if any(path is None for path in roots):
         raise ConfigError("roots 不能包含空路径")
@@ -126,7 +121,6 @@ def build_options(
         include_missing=bool(values["include_missing"]),
         hash_videos=bool(values["hash_videos"]),
         pilot_count=int(values["pilot_count"]),
-        apply=bool(values["apply"]),
     )
 
 
@@ -164,7 +158,7 @@ def print_report(report: DiscoveryReport) -> None:
 
 
 def add_discovery_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("roots", nargs="*", help="递归扫描的视频目录")
+    parser.add_argument("roots", nargs="+", help="递归扫描的视频目录，必须显式提供")
     parser.add_argument("--config", type=Path, help="JSON 配置文件")
     parser.add_argument(
         "--include-whitespace-only",
@@ -202,12 +196,6 @@ def add_pipeline_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--hotwords-file", type=Path, help="每行一个热词的 UTF-8 文件")
     parser.add_argument("--pilot-count", type=int, help="先行质量门禁的视频数量")
-    parser.add_argument(
-        "--apply",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="通过校验后原子写回目标 TXT；默认只暂存",
-    )
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -222,13 +210,12 @@ def create_parser() -> argparse.ArgumentParser:
     add_discovery_arguments(scan)
     scan.add_argument("--json", action="store_true", help="输出机器可读 JSON")
 
-    transcribe = commands.add_parser("transcribe", help="生成并按需写回字幕")
+    transcribe = commands.add_parser("transcribe", help="生成、校验并写回字幕")
     add_discovery_arguments(transcribe)
     add_pipeline_arguments(transcribe)
 
     resume = commands.add_parser("resume", help="继续已有运行")
     resume.add_argument("run_dir", type=Path, help="包含 manifest.json 的运行目录")
-    resume.add_argument("--apply", action="store_true", help="校验并写回字幕")
 
     verify = commands.add_parser("verify", help="复核已写回的运行")
     verify.add_argument("run_dir", type=Path, help="包含 manifest.json 的运行目录")
@@ -257,25 +244,23 @@ def command_transcribe(arguments: argparse.Namespace) -> int:
     pipeline = SubtitlePipeline.create(options, report)
     print(f"运行目录：{pipeline.run_dir}")
     pipeline.execute()
-    if options.apply:
-        print(f"字幕已写回并复核通过：{pipeline.run_dir}")
+    print(f"字幕已写回并复核通过：{pipeline.run_dir}")
     return 0
 
 
 def command_resume(arguments: argparse.Namespace) -> int:
-    pipeline = SubtitlePipeline.resume(arguments.run_dir, apply=arguments.apply)
+    pipeline = SubtitlePipeline.resume(arguments.run_dir)
     if pipeline.manifest.get("status") == "committed":
         report = pipeline.verify()
         print(f"复核通过，共 {report['verified_count']} 个字幕文件。")
         return 0
     pipeline.execute()
-    if arguments.apply:
-        print(f"字幕已写回并复核通过：{pipeline.run_dir}")
+    print(f"字幕已写回并复核通过：{pipeline.run_dir}")
     return 0
 
 
 def command_verify(arguments: argparse.Namespace) -> int:
-    pipeline = SubtitlePipeline.resume(arguments.run_dir, apply=False)
+    pipeline = SubtitlePipeline.resume(arguments.run_dir)
     report = pipeline.verify()
     print(f"复核通过，共 {report['verified_count']} 个字幕文件。")
     return 0

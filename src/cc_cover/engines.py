@@ -29,8 +29,7 @@ FUNASR_CACHE_NAMES = {
 
 
 def configure_model_cache(model_cache: Path) -> None:
-    model_cache.mkdir(parents=True, exist_ok=True)
-    runtime_temp = model_cache / ".runtime-temp"
+    runtime_temp = model_cache / "funasr" / ".runtime-temp"
     paths = {
         "MODELSCOPE_CACHE": model_cache / "funasr",
         "FUNASR_HOME": model_cache / "funasr",
@@ -42,9 +41,13 @@ def configure_model_cache(model_cache: Path) -> None:
         "TMP": runtime_temp,
         "TMPDIR": runtime_temp,
     }
-    for name, path in paths.items():
-        path.mkdir(parents=True, exist_ok=True)
-        os.environ[name] = str(path)
+    try:
+        model_cache.mkdir(parents=True, exist_ok=True)
+        for name, path in paths.items():
+            path.mkdir(parents=True, exist_ok=True)
+            os.environ[name] = str(path)
+    except OSError as exc:
+        raise EngineError(f"模型缓存目录不可写：{model_cache}: {exc}") from exc
     tempfile.tempdir = str(runtime_temp)
 
 

@@ -1,7 +1,4 @@
 {
-  "roots": [
-    "F:\\LLM\\深度学习"
-  ],
   "runs_root": ".\\runs",
   "model_cache": ".\\model-cache",
   "device": "auto",
@@ -16,6 +13,5 @@
   "include_whitespace_only": false,
   "include_missing": false,
   "hash_videos": true,
-  "pilot_count": 2,
-  "apply": false
+  "pilot_count": 2
 }

@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet("cuda", "cpu")]
     [string]$Device = "cuda",
@@ -7,6 +7,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$Utf8 = New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding = $Utf8
+[Console]::OutputEncoding = $Utf8
+$OutputEncoding = $Utf8
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $VenvRoot = Join-Path $ProjectRoot ".venv"
 $Python = Join-Path $VenvRoot "Scripts\python.exe"
@@ -42,4 +46,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "环境自检失败。"
 }
 
-Write-Host "安装完成。先执行：.\.venv\Scripts\cc-cover.exe scan 'F:\LLM\深度学习'"
+Write-Host "安装完成。双击 start.cmd，输入需要扫描的文件夹路径即可开始。"

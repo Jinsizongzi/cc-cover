@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from cc_cover.engines import local_faster_whisper_model, local_funasr_model
+from cc_cover.engines import (
+    configure_model_cache,
+    local_faster_whisper_model,
+    local_funasr_model,
+)
 from cc_cover.models import PipelineOptions
 from cc_cover.pipeline import options_from_dict, options_to_dict, write_bytes_atomic
 
@@ -26,14 +31,12 @@ class PipelineHelperTests(unittest.TestCase):
                 runs_root=root / "runs",
                 model_cache=root / "models",
                 include_whitespace_only=True,
-                apply=True,
             )
             restored = options_from_dict(options_to_dict(options))
 
         self.assertEqual(restored.roots, options.roots)
         self.assertEqual(restored.runs_root, options.runs_root)
         self.assertTrue(restored.include_whitespace_only)
-        self.assertTrue(restored.apply)
 
     def test_existing_model_caches_resolve_to_local_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -58,6 +61,28 @@ class PipelineHelperTests(unittest.TestCase):
 
         self.assertEqual(Path(resolved_funasr), snapshot.resolve())
         self.assertEqual(Path(resolved_whisper), whisper_model.resolve())
+
+    def test_runtime_temp_stays_inside_funasr_cache(self) -> None:
+        environment_names = ("TEMP", "TMP", "TMPDIR")
+        previous_environment = {
+            name: os.environ.get(name) for name in environment_names
+        }
+        previous_tempdir = tempfile.tempdir
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                cache = Path(temporary) / "model-cache"
+                configure_model_cache(cache)
+                expected = cache / "funasr" / ".runtime-temp"
+                self.assertTrue(expected.is_dir())
+                for name in environment_names:
+                    self.assertEqual(Path(os.environ[name]), expected)
+        finally:
+            for name, value in previous_environment.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            tempfile.tempdir = previous_tempdir
 
 
 if __name__ == "__main__":

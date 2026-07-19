@@ -141,7 +141,6 @@ def options_to_dict(options: PipelineOptions) -> dict[str, Any]:
         "include_missing": options.include_missing,
         "hash_videos": options.hash_videos,
         "pilot_count": options.pilot_count,
-        "apply": options.apply,
     }
 
 
@@ -173,7 +172,6 @@ def options_from_dict(value: Mapping[str, Any]) -> PipelineOptions:
         include_missing=bool(value.get("include_missing", False)),
         hash_videos=bool(value.get("hash_videos", True)),
         pilot_count=int(value.get("pilot_count", 2)),
-        apply=bool(value.get("apply", False)),
     )
 
 
@@ -395,11 +393,10 @@ class SubtitlePipeline:
         return cls(options, run_dir, report.candidates, report.protected_texts, manifest)
 
     @classmethod
-    def resume(cls, run_dir: Path, apply: bool = False) -> "SubtitlePipeline":
+    def resume(cls, run_dir: Path) -> "SubtitlePipeline":
         resolved = run_dir.expanduser().resolve()
         manifest = load_json(resolved / "manifest.json")
         options = options_from_dict(manifest["options"])
-        options.apply = apply
         candidates = [Candidate.from_dict(item) for item in manifest["candidates"]]
         protected = [
             ProtectedText.from_dict(item)
@@ -785,12 +782,8 @@ class SubtitlePipeline:
             self.stage(list(self.manifest["phases"]["all"]))
         elif pilot:
             self.stage(pilot)
-        if self.options.apply:
-            self.commit()
-            self.verify()
-        else:
-            print(f"字幕已暂存但未写回。运行目录：{self.run_dir}")
-            print(f"确认后执行：cc-cover resume \"{self.run_dir}\" --apply")
+        self.commit()
+        self.verify()
         return self.run_dir
 
 

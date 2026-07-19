@@ -171,4 +171,3 @@ class PipelineOptions:
     include_missing: bool = False
     hash_videos: bool = True
     pilot_count: int = 2
-    apply: bool = False
