@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cc-cover"
+version = "0.1.0"
+description = "Safely recover empty same-name video subtitle TXT files with FunASR and faster-whisper."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "imageio-ffmpeg>=0.6,<1",
+]
+
+[project.optional-dependencies]
+asr = [
+  "torch>=2.5,<3",
+  "torchaudio>=2.5,<3",
+  "funasr==1.3.16",
+  "modelscope==1.38.1",
+  "faster-whisper==1.2.1",
+  "ctranslate2==4.8.1",
+  "numpy>=1.26,<2",
+  "soundfile>=0.12,<1",
+]
+
+[project.scripts]
+cc-cover = "cc_cover.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
