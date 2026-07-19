@@ -6,14 +6,18 @@ from pathlib import Path
 
 
 class ProjectContractTests(unittest.TestCase):
-    def test_user_facing_files_have_no_default_path_or_write_switch(self) -> None:
+    def test_legacy_script_launchers_are_removed(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        for name in ("run.ps1", "setup.ps1", "start.cmd"):
+            with self.subTest(name=name):
+                self.assertFalse((project_root / name).exists())
+
+    def test_user_facing_files_have_no_default_scan_path(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         files = [
             project_root / "README.md",
-            project_root / "config.example.json",
-            project_root / "run.ps1",
-            project_root / "setup.ps1",
-            project_root / "start.cmd",
+            project_root / "src" / "cc_cover" / "gui.py",
+            project_root / "src" / "cc_cover" / "gui_support.py",
             project_root / "src" / "cc_cover" / "cli.py",
             project_root / "src" / "cc_cover" / "models.py",
             project_root / "src" / "cc_cover" / "pipeline.py",
@@ -26,18 +30,12 @@ class ProjectContractTests(unittest.TestCase):
                 self.assertIsNone(drive_path.search(text))
                 self.assertNotIn(obsolete_fragment, text.casefold())
 
-    def test_double_click_launcher_starts_interactive_script(self) -> None:
+    def test_readme_describes_graphical_software(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
-        launcher = (project_root / "start.cmd").read_text(encoding="utf-8")
-        self.assertIn("run.ps1", launcher)
-
-    def test_powershell_scripts_have_windows_utf8_bom(self) -> None:
-        project_root = Path(__file__).resolve().parents[1]
-        for name in ("run.ps1", "setup.ps1"):
-            with self.subTest(name=name):
-                self.assertTrue(
-                    (project_root / name).read_bytes().startswith(b"\xef\xbb\xbf")
-                )
+        readme = (project_root / "README.md").read_text(encoding="utf-8")
+        self.assertIn("CC-Cover.exe", readme)
+        self.assertIn("功能说明", readme)
+        self.assertIn("操作指南", readme)
 
 
 if __name__ == "__main__":

@@ -1,148 +1,73 @@
-# cc-cover
+# CC-Cover
 
-`cc-cover` 是一个本地字幕补全工具。启动后由用户输入需要扫描的文件夹，程序递归查找视频文件，只处理同名且字节大小为 `0` 的 `.txt`，使用 **FunASR** 生成中文正文和时间戳，并用 **faster-whisper** 进行第二模型对照与冲突审计。全部校验通过后，程序会直接替换这些空字幕文件。
+CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选择需要扫描的视频文件夹，CC-Cover 会自动查找空字幕 TXT，使用 FunASR 与 faster-whisper 生成和审计字幕，匹配已有字幕格式，并在校验通过后直接替换空 TXT。
 
-项目不预设任何扫描目录，也不会自动选择某个课程文件夹。
+软件不预设任何扫描目录，不需要 PowerShell、CMD 或额外写回参数。
 
-## 安全原则
+## 下载与启动
 
-- 默认只处理严格的零字节 `.txt`，不会覆盖已有字幕内容。
-- 非空 `.txt` 在处理前记录 SHA-256，写回前后都会复核，发现变化立即停止。
-- 视频默认记录 SHA-256，运行期间视频或目标文件变化时拒绝写回。
-- 输出先生成到独立运行目录，通过格式与质量校验后自动原子替换目标文件。
-- 写回前保留目标文件备份；批量写回失败时自动回滚本次已写文件。
-- 先处理少量试运行样本并执行质量门禁，再继续其余视频。
-- FunASR 是写回正文来源；faster-whisper 仅作为第二候选和审计依据，不会直接拼接两套结果。
+1. 打开项目的 [Releases](https://github.com/Jinsizongzi/cc-cover/releases) 页面。
+2. 下载最新版 `CC-Cover.exe`。
+3. 双击启动软件。
+4. 首次使用时，在软件的“运行环境”区域选择 NVIDIA GPU 或 CPU，然后点击“安装 / 修复运行环境”。
+5. 环境状态显示“运行环境已就绪”后，即可选择扫描目录。
 
-## 环境要求
+首次安装依赖和首次下载模型需要联网。软件会把隔离运行环境、模型缓存和运行报告保存到当前 Windows 用户的本地应用数据目录，不会写入用户选择的视频目录之外的字幕文件。
 
-- Windows 10/11
-- Python `3.10`、`3.11` 或 `3.12`
-- NVIDIA GPU 推荐；也支持 CPU，但大型模型会明显更慢
-- 首次使用需要联网下载 Python 依赖和模型
+## 使用流程
 
-## 首次安装
+1. 点击“选择文件夹”，提供需要扫描的视频目录。
+2. 软件自动快速扫描并列出待补全的 TXT。
+3. 检查候选列表和处理选项。
+4. 点击“开始补全并替换”。
+5. 在“运行日志”页面查看双模型处理进度。
+6. 完成后查看提示，或点击“打开运行目录”检查审计报告与备份。
 
-在项目目录打开 PowerShell：
+软件内部提供完整的“功能说明”和“操作指南”页面。
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\setup.ps1 -Device cuda
-```
+## 主要功能
 
-如果没有兼容的 NVIDIA GPU：
+- 图形化选择扫描目录，无默认扫描路径。
+- 默认只处理与视频同名且字节大小严格为 0 的 TXT。
+- FunASR 负责中文正文与句级时间戳。
+- faster-whisper 负责第二模型对照和冲突审计。
+- 自动检测编码、BOM、换行、时间戳、空行及标点格式。
+- 通过质量与格式校验后自动原子替换目标 TXT。
+- 写回前备份，批量失败时自动回滚。
+- 记录视频与受保护字幕的文件快照，变化时拒绝写回。
+- 支持 GPU/CPU、视频哈希、纯空白 TXT 和缺失 TXT 选项。
+- 提供实时日志、候选列表、环境安装和中断任务恢复。
 
-```powershell
-.\setup.ps1 -Device cpu
-```
+## 数据安全
 
-## 启动程序
-
-安装完成后，双击项目中的 `start.cmd`。
-
-程序会依次执行：
-
-1. 提示输入需要扫描的视频文件夹完整路径。
-2. 在用户提供的路径中递归扫描视频及同名字幕文件。
-3. 显示待补全的零字节 `.txt` 列表。
-4. 使用 FunASR 和 faster-whisper 生成及审计字幕。
-5. 按已有字幕格式自动替换零字节 `.txt`。
-6. 复核写回结果并显示运行目录。
-
-也可以从 PowerShell 启动，程序同样会提示输入路径：
-
-```powershell
-.\run.ps1
-```
-
-需要从命令行直接提供一个或多个目录时：
-
-```powershell
-.\run.ps1 -Roots "<待扫描目录>"
-```
-
-路径中包含空格或中文时，请保留双引号。
-
-## 配置文件
-
-`config.example.json` 只保存模型、运行产物和扫描策略，不保存扫描路径。扫描路径始终由启动时输入或 `-Roots` 参数提供。
-
-```powershell
-Copy-Item .\config.example.json .\config.json
-.\run.ps1 -Config .\config.json
-```
-
-命令行参数优先于配置文件。配置中的相对路径以配置文件所在目录为基准。
-
-默认不会处理“只有空格或换行”的 `.txt`，也不会创建缺失的 `.txt`。如确有需要，可显式启用：
-
-```powershell
-.\run.ps1 -IncludeWhitespaceOnly -IncludeMissing
-```
-
-## 使用已有环境与模型
-
-可以指定 FFmpeg、模型缓存和计算设备，同时仍由用户提供扫描目录：
-
-```powershell
-.\run.ps1 `
-  -Ffmpeg "<ffmpeg.exe 路径>" `
-  -Device cuda
-```
-
-也可设置环境变量 `CC_COVER_FFMPEG`。未指定时，程序优先使用 `imageio-ffmpeg` 自带的 FFmpeg，再尝试系统 `PATH`。
-
-## 格式匹配
-
-程序从用户提供的扫描目录内已有非空同名字幕中检测：
-
-- 文本编码及 BOM
-- `CRLF` 或 `LF` 换行
-- `MM:SS`、`HH:MM:SS` 或纯文本样式
-- 段落间空行和末尾换行
-- 是否保留句末标点
-
-优先采用目标视频同目录的主流格式；同目录没有样本时采用扫描根目录的主流格式；完全没有样本时回退为 UTF-8、无 BOM、CRLF、`MM:SS + 文本 + 空行`。
+- 非空字幕不会作为默认候选。
+- 扫描到的非空 TXT 会记录 SHA-256，并在写回前后复核。
+- 视频默认记录 SHA-256，运行期间变化会终止写回。
+- 输出先写入独立运行目录，再执行格式校验和质量门禁。
+- 每个目标 TXT 在替换前都会保存备份。
+- 写回失败时回滚本次已经替换的文件。
+- 视频、音频和字幕识别均在本机执行。
 
 ## 运行产物
 
-每次运行会在 `runs/<run_id>` 中保存：
+每次运行会保存：
 
-- `manifest.json`：候选快照、配置、阶段状态
-- `engines/funasr/*.json`：FunASR 原始结果
-- `engines/faster_whisper/*.json`：faster-whisper 对照结果
-- `audits/*.json`：逐段匹配与冲突审计
-- `prepared/*.txt`：通过校验后用于写回的最终字幕
-- `backups/*`：写回前目标文件备份
-- `commit_report.json` 与 `verification.json`：写回及最终复核结果
+- `manifest.json`：候选快照、配置和运行阶段。
+- `engines/funasr/*.json`：FunASR 原始结果。
+- `engines/faster_whisper/*.json`：faster-whisper 对照结果。
+- `audits/*.json`：逐段匹配和冲突审计。
+- `prepared/*.txt`：通过校验的最终字幕。
+- `backups/*`：替换前的目标文件备份。
+- `commit_report.json`：写回报告。
+- `verification.json`：最终复核报告。
 
-运行中断后，使用 `resume` 会复用已完成的模型结果，并在校验通过后直接完成写回：
+## 系统要求
 
-```powershell
-.\.venv\Scripts\cc-cover.exe resume "<运行目录>"
-```
-
-## 命令行
-
-```text
-cc-cover scan ROOT [ROOT ...]
-cc-cover transcribe ROOT [ROOT ...]
-cc-cover resume RUN_DIR
-cc-cover verify RUN_DIR
-```
-
-`transcribe` 和 `resume` 都会在校验通过后直接写回，不需要额外确认参数。
-
-查看完整参数：
-
-```powershell
-cc-cover --help
-cc-cover transcribe --help
-```
+- Windows 10 或 Windows 11。
+- Python 3.10、3.11 或 3.12。首次安装环境时由软件自动检测。
+- NVIDIA GPU 推荐；没有兼容 GPU 时可选择 CPU。
+- 首次安装建议预留充足磁盘空间用于 PyTorch 和语音模型。
 
 ## 开发验证
 
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m compileall -q src tests
-```
+项目使用 Python `unittest` 覆盖扫描、格式匹配、安全写回辅助函数、GUI 命令构建和无默认路径契约。GitHub Actions 会运行单元测试，并在 Windows 环境构建 `CC-Cover.exe`。

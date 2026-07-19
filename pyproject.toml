@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-cover"
-version = "0.2.0"
+version = "0.3.0"
 description = "Safely recover empty same-name video subtitle TXT files with FunASR and faster-whisper."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -26,6 +26,7 @@ asr = [
 
 [project.scripts]
 cc-cover = "cc_cover.cli:main"
+cc-cover-gui = "cc_cover.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
