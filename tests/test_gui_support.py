@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from cc_cover.cli import create_parser
 from cc_cover.gui_support import (
     GuiOptions,
     command_environment,
@@ -37,14 +38,24 @@ class GuiSupportTests(unittest.TestCase):
                 local_app_data=base / "local",
             )
             selected = base / "selected"
-            options = GuiOptions(device="cpu", hash_videos=True)
+            options = GuiOptions(
+                device="cpu",
+                hash_videos=True,
+                ffmpeg=base / "ffmpeg.exe",
+            )
             scan = scan_command(paths, selected, options)
             transcribe = transcribe_command(paths, selected, options)
 
+        create_parser().parse_args(scan[3:])
+        create_parser().parse_args(transcribe[3:])
         self.assertIn(str(selected), scan)
         self.assertIn(str(selected), transcribe)
         self.assertIn("--no-hash-videos", scan)
         self.assertNotIn("--no-hash-videos", transcribe)
+        self.assertNotIn("--device", scan)
+        self.assertNotIn("--ffmpeg", scan)
+        self.assertIn("--device", transcribe)
+        self.assertIn("--ffmpeg", transcribe)
 
     def test_setup_commands_select_requested_torch_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

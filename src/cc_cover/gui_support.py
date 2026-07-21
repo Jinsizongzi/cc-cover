@@ -87,14 +87,19 @@ def command_environment(
     return environment
 
 
-def option_arguments(options: GuiOptions, *, preview: bool = False) -> list[str]:
-    arguments = ["--device", options.device]
+def discovery_arguments(options: GuiOptions, *, preview: bool = False) -> list[str]:
+    arguments: list[str] = []
     if options.include_whitespace_only:
         arguments.append("--include-whitespace-only")
     if options.include_missing:
         arguments.append("--include-missing")
     if preview or not options.hash_videos:
         arguments.append("--no-hash-videos")
+    return arguments
+
+
+def pipeline_arguments(options: GuiOptions) -> list[str]:
+    arguments = ["--device", options.device]
     if options.ffmpeg is not None:
         arguments.extend(["--ffmpeg", str(options.ffmpeg)])
     return arguments
@@ -108,7 +113,7 @@ def scan_command(paths: RuntimePaths, root: Path, options: GuiOptions) -> list[s
         "scan",
         str(root),
         "--json",
-        *option_arguments(options, preview=True),
+        *discovery_arguments(options, preview=True),
     ]
 
 
@@ -125,7 +130,8 @@ def transcribe_command(
         str(paths.runs_root),
         "--model-cache",
         str(paths.model_cache),
-        *option_arguments(options),
+        *discovery_arguments(options),
+        *pipeline_arguments(options),
     ]
 
 
