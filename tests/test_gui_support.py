@@ -8,6 +8,8 @@ from cc_cover.cli import create_parser
 from cc_cover.gui_support import (
     GuiOptions,
     command_environment,
+    environment_check_command,
+    environment_status_label,
     runtime_paths,
     scan_command,
     setup_commands,
@@ -68,8 +70,38 @@ class GuiSupportTests(unittest.TestCase):
             cuda = setup_commands(paths, ["python"], "cuda")
             cpu = setup_commands(paths, ["python"], "cpu")
 
-        self.assertIn("https://download.pytorch.org/whl/cu121", cuda[2])
-        self.assertIn("https://download.pytorch.org/whl/cpu", cpu[2])
+        self.assertIn("uninstall", cuda[2])
+        self.assertIn("-y", cuda[2])
+        self.assertIn("torch", cuda[2])
+        self.assertIn("torchaudio", cuda[2])
+        self.assertIn("--force-reinstall", cuda[3])
+        self.assertIn("--no-cache-dir", cuda[3])
+        self.assertIn("https://download.pytorch.org/whl/cu121", cuda[3])
+        self.assertIn("--force-reinstall", cpu[3])
+        self.assertIn("https://download.pytorch.org/whl/cpu", cpu[3])
+
+    def test_environment_check_requires_cuda_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True,
+                bundle_root=base / "bundle",
+                local_app_data=base / "local",
+            )
+            cuda = environment_check_command(paths, "cuda")
+            cpu = environment_check_command(paths, "cpu")
+
+        self.assertIn("require_cuda = True", cuda[-1])
+        self.assertIn("require_cuda = False", cpu[-1])
+        self.assertIn("CTranslate2 CUDA devices", cuda[-1])
+        self.assertEqual(
+            environment_status_label("cuda", "CUDA: True"),
+            "运行环境已就绪（GPU）",
+        )
+        self.assertEqual(
+            environment_status_label("cpu", "CUDA: False"),
+            "运行环境已就绪（CPU）",
+        )
 
     def test_subprocess_environment_includes_bundled_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

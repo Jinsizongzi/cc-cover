@@ -156,6 +156,8 @@ def python_candidates() -> list[list[str]]:
 def setup_commands(
     paths: RuntimePaths, base_python: Sequence[str], accelerator: str
 ) -> list[list[str]]:
+    if accelerator not in {"cuda", "cpu"}:
+        raise ValueError(f"不支持的加速器：{accelerator}")
     torch_index = (
         "https://download.pytorch.org/whl/cu121"
         if accelerator == "cuda"
@@ -176,11 +178,23 @@ def setup_commands(
                 "setuptools",
                 "wheel",
             ],
+            # CPU/CUDA 轮子版本号相同，必须先卸掉再装，否则 pip 会跳过替换。
+            [
+                str(paths.venv_python),
+                "-m",
+                "pip",
+                "uninstall",
+                "-y",
+                "torch",
+                "torchaudio",
+            ],
             [
                 str(paths.venv_python),
                 "-m",
                 "pip",
                 "install",
+                "--force-reinstall",
+                "--no-cache-dir",
                 f"torch=={TORCH_VERSION}",
                 f"torchaudio=={TORCH_VERSION}",
                 "--index-url",
@@ -198,15 +212,36 @@ def setup_commands(
     return commands
 
 
-def environment_check_command(paths: RuntimePaths) -> list[str]:
+def environment_check_command(
+    paths: RuntimePaths, accelerator: str = "cpu"
+) -> list[str]:
+    if accelerator not in {"cuda", "cpu"}:
+        raise ValueError(f"不支持的加速器：{accelerator}")
+    require_cuda = "True" if accelerator == "cuda" else "False"
     return [
         str(paths.venv_python),
         "-c",
         (
             "import ctranslate2, funasr, faster_whisper, imageio_ffmpeg, torch; "
+            f"require_cuda = {require_cuda}; "
+            "cuda_ok = bool(torch.cuda.is_available()); "
+            "ct2_count = int(ctranslate2.get_cuda_device_count()); "
             "print('环境检查通过'); "
             "print('PyTorch:', torch.__version__); "
-            "print('CUDA:', torch.cuda.is_available()); "
-            "print('FFmpeg:', imageio_ffmpeg.get_ffmpeg_exe())"
+            "print('CUDA:', cuda_ok); "
+            "print('CTranslate2 CUDA devices:', ct2_count); "
+            "print('FFmpeg:', imageio_ffmpeg.get_ffmpeg_exe()); "
+            "ok = (not require_cuda) or (cuda_ok and ct2_count > 0); "
+            "raise SystemExit("
+            "0 if ok else "
+            "(print('错误：已选择 NVIDIA GPU，但当前环境 CUDA 不可用。"
+            "请确认已安装 NVIDIA 驱动，并重新执行安装 / 修复运行环境。') or 1)"
+            ")"
         ),
     ]
+
+
+def environment_status_label(accelerator: str, _check_output: str = "") -> str:
+    if accelerator == "cuda":
+        return "运行环境已就绪（GPU）"
+    return "运行环境已就绪（CPU）"

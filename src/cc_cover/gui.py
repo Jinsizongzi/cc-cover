@@ -16,6 +16,7 @@ from cc_cover.gui_support import (
     RuntimePaths,
     command_environment,
     environment_check_command,
+    environment_status_label,
     python_candidates,
     resume_command,
     runtime_paths,
@@ -69,6 +70,7 @@ GUIDE_TEXT = """操作指南
 2. 在“运行环境”区域选择 NVIDIA GPU 或 CPU。
 3. 点击“安装 / 修复运行环境”。软件会自动创建隔离环境并安装所需组件，不需要打开命令行窗口。
 4. 等待状态显示“运行环境已就绪”。首次安装耗时取决于网络速度。
+5. 若从 CPU 改为 GPU（或反过来），必须再次点击“安装 / 修复运行环境”，否则会继续使用旧的 PyTorch 包。
 
 补全字幕
 
@@ -558,13 +560,27 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(("environment", (False, "尚未安装")))
                 self.events.put(("idle", "请先安装运行环境"))
                 return
+            accelerator = self.accelerator.get()
             try:
-                output = self._run_capture(environment_check_command(self.paths))
+                output = self._run_capture(
+                    environment_check_command(self.paths, accelerator)
+                )
             except Exception as exc:
-                self.events.put(("environment", (False, "需要安装或修复")))
-                self.events.put(("log", f"环境检查失败：{exc}\n"))
+                detail = str(exc).strip() or "需要安装或修复"
+                label = (
+                    "GPU 环境未就绪"
+                    if accelerator == "cuda"
+                    else "需要安装或修复"
+                )
+                self.events.put(("environment", (False, label)))
+                self.events.put(("log", f"环境检查失败：{detail}\n"))
             else:
-                self.events.put(("environment", (True, "运行环境已就绪")))
+                self.events.put(
+                    (
+                        "environment",
+                        (True, environment_status_label(accelerator, output)),
+                    )
+                )
                 self.events.put(("log", output + "\n"))
             self.events.put(("idle", "就绪"))
 
@@ -597,18 +613,31 @@ class CCCoverApp(ttk.Frame):
             try:
                 self.paths.data_root.mkdir(parents=True, exist_ok=True)
                 base_python = self._find_base_python()
-                commands = setup_commands(
-                    self.paths, base_python, self.accelerator.get()
-                )
+                accelerator = self.accelerator.get()
+                commands = setup_commands(self.paths, base_python, accelerator)
                 self.events.put(("log", "开始安装运行环境。此过程可能需要较长时间。\n"))
+                if accelerator == "cuda":
+                    self.events.put(
+                        (
+                            "log",
+                            "将强制重装 GPU 版 PyTorch，以便覆盖已安装的 CPU 包。\n",
+                        )
+                    )
                 for index, command in enumerate(commands, start=1):
                     self.events.put(
                         ("status", f"正在安装组件 {index}/{len(commands)}…")
                     )
                     self._run_streaming(command)
-                output = self._run_capture(environment_check_command(self.paths))
+                output = self._run_capture(
+                    environment_check_command(self.paths, accelerator)
+                )
                 self.events.put(("log", output + "\n"))
-                self.events.put(("environment", (True, "运行环境已就绪")))
+                self.events.put(
+                    (
+                        "environment",
+                        (True, environment_status_label(accelerator, output)),
+                    )
+                )
                 self.events.put(
                     (
                         "done",
