@@ -19,6 +19,7 @@ from cc_cover.gui_support import (
     GuiOptions,
     RuntimePaths,
     SettingsError,
+    SingleInstanceLock,
     apply_data_root,
     command_environment,
     default_data_root,
@@ -29,6 +30,7 @@ from cc_cover.gui_support import (
     error_text,
     failure_info_from_command,
     first_failed_sample,
+    focus_existing_window,
     load_gui_settings,
     parsed_device,
     python_candidates,
@@ -99,6 +101,8 @@ GUIDE_TEXT = """操作指南
 4. 等待状态显示“运行环境已就绪”。首次安装耗时取决于网络速度。
 5. 切换运行设备后，软件会自动重新检查环境；如果当前环境不匹配所选设备，会提示重新安装 / 修复运行环境。
 
+同一数据目录只允许一个实例运行；若软件已在运行，再次启动会提示“CC-Cover 已在运行”并退出，同时尝试切换到已打开的窗口。
+
 补全字幕
 
 1. 点击“选择文件夹”，选择需要处理的视频目录。软件不会预设任何扫描路径。
@@ -131,10 +135,13 @@ GUIDE_TEXT = """操作指南
 
 
 class CCCoverApp(ttk.Frame):
-    def __init__(self, master: tk.Tk, paths: RuntimePaths):
+    def __init__(
+        self, master: tk.Tk, paths: RuntimePaths, lock: SingleInstanceLock
+    ):
         super().__init__(master, padding=0)
         self.master = master
         self.paths = paths
+        self.lock = lock
         self.default_root = default_data_root()
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.process: subprocess.Popen[str] | None = None
@@ -721,19 +728,39 @@ class CCCoverApp(ttk.Frame):
         )
         if not selected:
             return
+        new_lock = SingleInstanceLock(Path(selected))
+        try:
+            if not new_lock.acquire():
+                messagebox.showerror(
+                    "数据根被占用",
+                    "另一个 CC-Cover 实例正在使用所选的数据目录。\n\n"
+                    "请先关闭该实例，或选择其他目录。",
+                    parent=self.master,
+                )
+                return
+        except OSError as exc:
+            messagebox.showerror(
+                "无法创建单实例锁", str(exc), parent=self.master
+            )
+            return
         try:
             new_root = apply_data_root(
                 self.default_root, self.paths.data_root, Path(selected)
             )
         except (OSError, SettingsError) as exc:
+            new_lock.release()
             messagebox.showerror("更改数据根失败", str(exc), parent=self.master)
             return
         self.paths = runtime_paths(data_root=new_root)
         try:
             ensure_data_root(self.paths)
         except OSError as exc:
+            new_lock.release()
             messagebox.showerror("无法创建数据目录", str(exc), parent=self.master)
             return
+        previous_lock = self.lock
+        self.lock = new_lock
+        previous_lock.release()
         self.data_root_path.set(str(self.paths.data_root))
         self.environment_ready = False
         self.environment_status.set("需要重新安装")
@@ -1417,9 +1444,28 @@ def main() -> None:
         messagebox.showerror("无法创建数据目录", str(exc), parent=root)
         root.destroy()
         return
-    CCCoverApp(root, paths)
-    root.deiconify()
-    root.mainloop()
+    lock = SingleInstanceLock(paths.data_root)
+    try:
+        if not lock.acquire():
+            messagebox.showinfo(
+                "CC-Cover 已在运行",
+                "CC-Cover 已在运行，本实例即将退出。\n\n"
+                "可切换到已打开的 CC-Cover 窗口继续操作。",
+                parent=root,
+            )
+            focus_existing_window()
+            root.destroy()
+            return
+    except OSError as exc:
+        messagebox.showerror("无法创建单实例锁", str(exc), parent=root)
+        root.destroy()
+        return
+    try:
+        CCCoverApp(root, paths, lock)
+        root.deiconify()
+        root.mainloop()
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":
