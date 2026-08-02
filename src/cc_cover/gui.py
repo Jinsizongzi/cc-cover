@@ -701,6 +701,11 @@ class CCCoverApp(ttk.Frame):
         )
         if not selected:
             return
+        if (
+            Path(selected).expanduser().resolve()
+            == self.paths.data_root.resolve()
+        ):
+            return
         new_lock = SingleInstanceLock(Path(selected))
         try:
             if not new_lock.acquire():
