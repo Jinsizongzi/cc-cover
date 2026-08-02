@@ -5,6 +5,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
@@ -18,11 +19,13 @@ from cc_cover.gui_support import (
     GUI_DEVICE_CHOICES,
     GuiSettings,
     GuiOptions,
+    ProgressTracker,
     RuntimePaths,
     SettingsError,
     SingleInstanceLock,
     apply_data_root,
     command_environment,
+    confirmation_text,
     default_data_root,
     delete_runs,
     device_probe_commands,
@@ -33,11 +36,14 @@ from cc_cover.gui_support import (
     failure_info_from_command,
     first_failed_sample,
     focus_existing_window,
+    format_duration,
     format_size,
     list_runs,
     load_gui_settings,
     parsed_device,
     parsed_nvidia_probe,
+    play_completion_sound,
+    progress_text,
     python_candidates,
     resume_command,
     resolve_data_root,
@@ -48,12 +54,22 @@ from cc_cover.gui_support import (
     runtime_paths,
     save_gui_settings,
     scan_command,
+    scan_confirmation_stats,
     setup_commands,
+    should_play_completion_sound,
     stopped_message,
     terminate_process_tree,
     transcribe_command,
 )
-from cc_cover.pipeline import PipelineError, run_status_label, write_summary
+from cc_cover.pipeline import (
+    SUMMARY_FILENAME,
+    CompletionStats,
+    PipelineError,
+    load_optional_json,
+    run_completion_stats,
+    run_status_label,
+    write_summary,
+)
 
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -117,8 +133,8 @@ GUIDE_TEXT = """操作指南
 2. 选择目录后会自动进行快速扫描，也可以点击“重新扫描”。
 3. 在候选列表中确认待补全字幕；冲突项会标记“冲突”，默认不会处理。
 4. 根据需要调整运行设备、视频哈希保护与 FFmpeg 路径。
-5. 点击“开始补全并替换”。软件将自动完成双模型识别、审计、格式化、备份、替换和最终复核。
-6. 在“运行日志”页查看实时进度。完成后可点击“打开运行目录”查看详细产物；每次运行都会在运行目录生成 summary.txt 摘要（起止时间、统计、失败/告警明细与写回清单）。
+5. 点击“开始补全并替换”。软件会先弹出确认框（将处理 N 个视频并替换同名 TXT，含已排除数量，替换前自动备份）；确认后自动完成双模型识别、审计、格式化、备份、替换和最终复核。
+6. 运行期间进度条显示「第 N / 共 M 个」、百分比、已用时长与粗估剩余时间；在“运行日志”页可查看逐文件明细。完成后弹窗显示总耗时、写回数量与告警数量（可点击查看 summary.txt），并可打开本次运行目录；每次运行都会在运行目录生成 summary.txt 摘要。
 
 中断恢复
 
@@ -171,6 +187,9 @@ class CCCoverApp(ttk.Frame):
         self.status = tk.StringVar(value="正在检查运行环境…")
         self.environment_status = tk.StringVar(value="检查中")
         self.summary = tk.StringVar(value="尚未选择扫描目录")
+        self.progress_var = tk.StringVar(value="")
+        self._progress_tracker: ProgressTracker | None = None
+        self._session_started_at: float | None = None
         self._save_after_id: str | None = None
         self._applying_device_value = False
         self._device_recheck_after_id: str | None = None
@@ -466,11 +485,18 @@ class CCCoverApp(ttk.Frame):
             state="disabled",
         )
         self.cancel_button.pack(side="left", padx=(8, 0))
-        self.progress = ttk.Progressbar(action_panel, mode="indeterminate", length=180)
-        self.progress.pack(side="right", padx=(12, 0))
         ttk.Label(
             action_panel, textvariable=self.status, style="Subtitle.TLabel"
         ).pack(side="right")
+        progress_row = ttk.Frame(self.work_tab, style="App.TFrame")
+        progress_row.pack(fill="x", pady=(0, 2), before=candidate_panel)
+        self.progress = ttk.Progressbar(progress_row, mode="indeterminate", length=260)
+        self.progress.pack(side="left", padx=(0, 10))
+        ttk.Label(
+            progress_row,
+            textvariable=self.progress_var,
+            style="Subtitle.TLabel",
+        ).pack(side="left")
 
     def _build_text_tab(self, parent: ttk.Frame, content: str) -> None:
         text = scrolledtext.ScrolledText(
@@ -613,9 +639,11 @@ class CCCoverApp(ttk.Frame):
             widget.configure(state=state)
         self.cancel_button.configure(state="normal" if busy else "disabled")
         if busy:
+            self.progress.configure(mode="indeterminate")
             self.progress.start(10)
         else:
             self.progress.stop()
+            self._clear_progress()
         if status is not None:
             self.status.set(status)
 
@@ -997,8 +1025,8 @@ class CCCoverApp(ttk.Frame):
             try:
                 report = self._scan_report(root, options)
                 scanning = False
-                count = int(report.get("candidate_count", 0))
-                if count == 0:
+                candidate_count, excluded_count = scan_confirmation_stats(report)
+                if candidate_count == 0:
                     self.events.put(
                         (
                             "done",
@@ -1006,9 +1034,17 @@ class CCCoverApp(ttk.Frame):
                         )
                     )
                     return
+                if not self._confirm_start(candidate_count, excluded_count):
+                    self.events.put(("idle", "已取消开始"))
+                    return
                 self.events.put(
-                    ("log", f"扫描发现 {count} 个待补全字幕，开始双模型处理。\n")
+                    (
+                        "log",
+                        f"扫描发现 {candidate_count} 个待补全字幕，"
+                        f"已排除 {excluded_count} 个，开始双模型处理。\n",
+                    )
                 )
+                self.events.put(("progress_start", candidate_count))
                 self.events.put(("status", "正在生成并替换字幕…"))
                 chunks.append(
                     self._run_streaming(
@@ -1021,7 +1057,7 @@ class CCCoverApp(ttk.Frame):
                         "done",
                         (
                             "字幕补全完成",
-                            f"已完成 {count} 个字幕文件的生成、替换和复核。",
+                            f"已完成 {candidate_count} 个字幕文件的生成、替换和复核。",
                             run_dir,
                         ),
                     )
@@ -1083,6 +1119,11 @@ class CCCoverApp(ttk.Frame):
             chunks: list[str] = []
             try:
                 self.events.put(("status", "正在继续中断任务…"))
+                manifest = load_optional_json(run_dir / "manifest.json") or {}
+                candidates = manifest.get("candidates") or []
+                total = len(candidates) if isinstance(candidates, list) else 0
+                if total:
+                    self.events.put(("progress_start", total))
                 chunks.append(
                     self._run_streaming(resume_command(self.paths, run_dir))
                 )
@@ -1398,6 +1439,113 @@ class CCCoverApp(ttk.Frame):
         except (OSError, PipelineError):
             pass
 
+    def _confirm_start(self, candidate_count: int, excluded_count: int) -> bool:
+        """在 GUI 线程弹出开始前确认框并等待结果；任务已停止时视为取消。"""
+        result_queue: queue.Queue[bool] = queue.Queue()
+        self.events.put(
+            ("confirm_start", (candidate_count, excluded_count, result_queue))
+        )
+        confirmed = result_queue.get()
+        if self.cancel_requested:
+            return False
+        return confirmed
+
+    def _show_confirm_start_dialog(
+        self,
+        candidate_count: int,
+        excluded_count: int,
+        result_queue: queue.Queue[bool],
+    ) -> None:
+        dialog = self._result_dialog("确认开始")
+        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
+        body.pack(fill="x")
+        ttk.Label(
+            body,
+            text=confirmation_text(candidate_count, excluded_count),
+            style="Body.TLabel",
+            wraplength=460,
+            justify="left",
+        ).pack(anchor="w")
+
+        def confirm() -> None:
+            result_queue.put(True)
+            dialog.destroy()
+
+        def cancel() -> None:
+            result_queue.put(False)
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+        actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
+        actions.pack(fill="x")
+        ttk.Button(
+            actions,
+            text="开始",
+            style="Primary.TButton",
+            command=confirm,
+        ).pack(side="right")
+        ttk.Button(
+            actions,
+            text="取消",
+            style="Action.TButton",
+            command=cancel,
+        ).pack(side="right", padx=(0, 8))
+
+    def _start_progress(self, total: int) -> None:
+        self._session_started_at = time.monotonic()
+        self._progress_tracker = ProgressTracker(
+            total=total, started_at=self._session_started_at
+        )
+        self.progress.configure(mode="determinate", maximum=100, value=0)
+        self.progress.stop()
+        self._refresh_progress()
+        self.after(500, self._schedule_progress_refresh)
+
+    def _schedule_progress_refresh(self) -> None:
+        if self._progress_tracker is None:
+            return
+        self._refresh_progress()
+        self.after(500, self._schedule_progress_refresh)
+
+    def _refresh_progress(self) -> None:
+        tracker = self._progress_tracker
+        if tracker is None:
+            return
+        snapshot = tracker.snapshot()
+        self.progress.configure(value=snapshot.percent)
+        self.progress_var.set(progress_text(snapshot))
+
+    def _on_progress_line(self, line: str) -> None:
+        if self._progress_tracker is None:
+            return
+        self._progress_tracker.on_progress_line(line)
+        self._refresh_progress()
+
+    def _clear_progress(self) -> None:
+        if self._progress_tracker is None:
+            return
+        self._progress_tracker = None
+        self._session_started_at = None
+        self.progress_var.set("")
+        self.progress.configure(mode="indeterminate", value=0)
+
+    def _session_elapsed(self) -> float | None:
+        """本次运行会话的已耗时（进度开始到结束），用于完成提示音的判断。"""
+        if self._session_started_at is None:
+            return None
+        return time.monotonic() - self._session_started_at
+
+    def _open_summary(self, run_dir: Path) -> None:
+        summary = run_dir / SUMMARY_FILENAME
+        try:
+            os.startfile(str(summary))
+        except OSError:
+            messagebox.showwarning(
+                "无法打开运行摘要",
+                f"未找到运行摘要：{summary}",
+                parent=self.master,
+            )
+
     def _show_failure_dialog(self, title: str, info: FailureInfo) -> None:
         dialog = self._result_dialog(title)
         body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
@@ -1494,29 +1642,57 @@ class CCCoverApp(ttk.Frame):
             command=dialog.destroy,
         ).pack(side="right")
 
-    def _show_done_dialog(self, title: str, message: str, run_dir: Path | None) -> None:
+    def _show_done_dialog(
+        self,
+        title: str,
+        message: str,
+        run_dir: Path | None,
+        stats: CompletionStats | None = None,
+    ) -> None:
         dialog = self._result_dialog(title)
         body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
         body.pack(fill="x")
+        body.columnconfigure(1, weight=1)
         ttk.Label(
             body,
             text=message,
             style="Body.TLabel",
             wraplength=500,
             justify="left",
-        ).pack(anchor="w")
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        if stats is not None:
+            self._dialog_row(body, 1, "总耗时：", format_duration(stats.elapsed_seconds))
+            self._dialog_row(
+                body, 2, "写回：", f"{stats.written_count} 个视频已生成并写回"
+            )
+            ttk.Label(body, text="告警：", style="Body.TLabel").grid(
+                row=3, column=0, sticky="nw", pady=(4, 0)
+            )
+            if stats.warning_count:
+                ttk.Button(
+                    body,
+                    text=f"{stats.warning_count} 条（点击查看 summary.txt）",
+                    style="Action.TButton",
+                    command=lambda: self._open_summary(run_dir),
+                ).grid(row=3, column=1, sticky="w", padx=(10, 0), pady=(4, 0))
+            else:
+                ttk.Label(
+                    body,
+                    text="无",
+                    style="Body.TLabel",
+                ).grid(row=3, column=1, sticky="nw", pady=(4, 0), padx=(10, 0))
         actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
         actions.pack(fill="x")
         if run_dir is not None:
             ttk.Button(
                 actions,
-                text="打开运行目录",
+                text="打开本次运行目录",
                 style="Action.TButton",
                 command=lambda: self._open_directory(run_dir),
             ).pack(side="left")
         ttk.Button(
             actions,
-            text="关闭",
+            text="完成",
             style="Action.TButton",
             command=dialog.destroy,
         ).pack(side="right")
@@ -1527,6 +1703,14 @@ class CCCoverApp(ttk.Frame):
                 event, payload = self.events.get_nowait()
                 if event == "log":
                     self._append_log(str(payload))
+                    self._on_progress_line(str(payload))
+                elif event == "progress_start":
+                    self._start_progress(int(payload))
+                elif event == "confirm_start":
+                    candidate_count, excluded_count, result_queue = payload
+                    self._show_confirm_start_dialog(
+                        candidate_count, excluded_count, result_queue
+                    )
                 elif event == "status":
                     self.status.set(str(payload))
                 elif event == "scan_report":
@@ -1562,8 +1746,15 @@ class CCCoverApp(ttk.Frame):
                     self._set_busy(False, str(payload))
                 elif event == "done":
                     title, message, run_dir = payload
+                    session_elapsed = self._session_elapsed()
                     self._set_busy(False, "就绪")
-                    self._show_done_dialog(title, message, run_dir)
+                    if run_dir is not None:
+                        stats = run_completion_stats(run_dir)
+                        if should_play_completion_sound(session_elapsed):
+                            self.after(0, play_completion_sound)
+                        self._show_done_dialog(title, message, run_dir, stats)
+                    else:
+                        self._show_done_dialog(title, message, None)
                 elif event == "cancelled":
                     info = payload
                     self._set_busy(False, "任务已停止")

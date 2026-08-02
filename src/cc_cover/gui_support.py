@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -100,6 +101,9 @@ RUN_DIR_PATTERN = re.compile(r"^运行目录：\s*(.+?)\s*$", re.MULTILINE)
 ERROR_LINE_PATTERN = re.compile(r"^错误：\s*(.+)$", re.MULTILINE)
 PROGRESS_PATTERN = re.compile(
     r"^\[[A-Za-z_\-]+\s+(\d+)/(\d+)\]\s*(.*)$", re.MULTILINE
+)
+PROGRESS_ENGINE_PATTERN = re.compile(
+    r"^\[([A-Za-z_\-]+)\s+\d+/\d+\]\s*(.*)$", re.MULTILINE
 )
 VIDEO_PATH_PATTERN = re.compile(
     r"((?:[A-Za-z]:[\\/]|[\\/])[^\s,，）)\]]+\.(?:mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mts|ogv|mpg|mpeg|3gp|rmvb|rm|vob|asf|f4v|divx))",
@@ -327,6 +331,137 @@ def format_size(size_bytes: int) -> str:
             return f"{value:.1f} {unit}"
         value /= 1024.0
     return f"{int(size_bytes)} B"
+
+
+def format_duration(seconds: float | None) -> str:
+    """秒数转中文时长；无法计算时返回「未知」。"""
+    if seconds is None:
+        return "未知"
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours} 时 {minutes} 分 {secs} 秒"
+    if minutes:
+        return f"{minutes} 分 {secs} 秒"
+    return f"{secs} 秒"
+
+
+@dataclass(frozen=True)
+class ProgressSnapshot:
+    current: int
+    total: int
+    percent: int
+    elapsed_seconds: float
+    remaining_seconds: float | None
+
+
+class ProgressTracker:
+    """解析转写进度行，跟踪「第 N / 共 M 个」与耗时/粗估剩余时间。
+
+    进度行形如 ``[funasr 2/5] <视频路径>``，每个视频在双模型（funasr /
+    faster_whisper）各打印一行；一个文件两行都出现才计为完成，百分比因此反映
+    真实的转写完成度，而不是“已开始”。剩余时间按「平均耗时 × 剩余数」粗估。
+    """
+
+    _ENGINES = ("funasr", "faster_whisper")
+
+    def __init__(self, total: int, started_at: float = 0.0):
+        self.total = max(0, int(total))
+        self.started_at = float(started_at)
+        self._engines_by_path: dict[str, set[str]] = {}
+
+    def on_progress_line(self, line: str) -> None:
+        match = PROGRESS_ENGINE_PATTERN.search(line)
+        if match is None:
+            return
+        engine = match.group(1)
+        path = match.group(2).strip()
+        if path:
+            self._engines_by_path.setdefault(path, set()).add(engine)
+
+    def _completed_count(self) -> int:
+        required = set(self._ENGINES)
+        return sum(
+            1
+            for engines in self._engines_by_path.values()
+            if required <= engines
+        )
+
+    def snapshot(self, now: float | None = None) -> ProgressSnapshot:
+        current = self._completed_count()
+        now = time.monotonic() if now is None else float(now)
+        elapsed = max(0.0, now - self.started_at)
+        percent = round(current / self.total * 100) if self.total > 0 else 0
+        remaining: float | None = None
+        if current > 0 and self.total > current:
+            remaining = (elapsed / current) * (self.total - current)
+        return ProgressSnapshot(
+            current=current,
+            total=self.total,
+            percent=percent,
+            elapsed_seconds=elapsed,
+            remaining_seconds=remaining,
+        )
+
+
+def progress_text(snapshot: ProgressSnapshot) -> str:
+    """进度显示文本：第 N / 共 M 个（百分比）· 已用时 · 约剩余。"""
+    parts = [
+        f"第 {snapshot.current} / 共 {snapshot.total} 个（{snapshot.percent}%）",
+        f"已用时 {format_duration(snapshot.elapsed_seconds)}",
+    ]
+    if snapshot.remaining_seconds is not None:
+        parts.append(f"约剩余 {format_duration(snapshot.remaining_seconds)}")
+    return " · ".join(parts)
+
+
+def scan_confirmation_stats(report: Mapping[str, Any]) -> tuple[int, int]:
+    """从扫描报告取开始前确认框的统计：(待处理 N, 已排除 M)。
+
+    已排除数优先使用显式 ``excluded_count`` 字段；否则统计冲突条目中的视频总数
+    （同 stem 冲突默认不处理、不写回）。
+    """
+    candidates = int(report.get("candidate_count") or 0)
+    if "excluded_count" in report:
+        excluded = int(report.get("excluded_count") or 0)
+    else:
+        excluded = sum(
+            len(conflict.get("videos") or [])
+            for conflict in report.get("conflicts") or []
+            if isinstance(conflict, dict)
+        )
+    return candidates, excluded
+
+
+def confirmation_text(candidate_count: int, excluded_count: int) -> str:
+    """开始前确认框的文案：将处理 N 个视频并替换同名 TXT，含已排除数量。"""
+    lines = [
+        f"将处理 {candidate_count} 个视频并替换同名 TXT（替换前自动备份）。"
+    ]
+    if excluded_count:
+        lines.append(f"已排除 {excluded_count} 个视频，本次不处理。")
+    else:
+        lines.append("本次无已排除的视频。")
+    return "\n".join(lines)
+
+
+RUN_SOUND_MIN_SECONDS = 5 * 60
+
+
+def should_play_completion_sound(elapsed_seconds: float | None) -> bool:
+    """运行超过 5 分钟才播放完成提示音。"""
+    return elapsed_seconds is not None and elapsed_seconds > RUN_SOUND_MIN_SECONDS
+
+
+def play_completion_sound() -> None:
+    """播放 Windows 提示音；其他平台或失败时静默跳过。"""
+    try:
+        import winsound
+
+        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+    except (ImportError, OSError, RuntimeError):
+        pass
 
 
 def stopped_message(info: FailureInfo) -> str:
