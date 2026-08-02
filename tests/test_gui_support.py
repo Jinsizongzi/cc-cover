@@ -25,9 +25,9 @@ from cc_cover.gui_support import (
     environment_status_label,
     estimate_processing_seconds,
     focus_existing_window,
-    format_duration,
+    format_column_duration,
+    format_column_size,
     format_estimate,
-    format_size,
     is_writable,
     load_gui_settings,
     nvidia_probe_command,
@@ -242,7 +242,7 @@ class GuiSupportTests(unittest.TestCase):
             paths = runtime_paths(
                 frozen=True,
                 bundle_root=base / "bundle",
-                local_app_data=base / "local",
+                data_root=base / "local",
             )
             selected = base / "selected"
             exclude_file = base / "excluded.json"
@@ -273,17 +273,17 @@ class EstimateFormattingTests(unittest.TestCase):
         )
 
     def test_format_duration_helpers(self) -> None:
-        self.assertEqual(format_duration(None), "—")
-        self.assertEqual(format_duration(0), "00:00")
-        self.assertEqual(format_duration(83.45), "01:23")
-        self.assertEqual(format_duration(3723), "1:02:03")
+        self.assertEqual(format_column_duration(None), "—")
+        self.assertEqual(format_column_duration(0), "00:00")
+        self.assertEqual(format_column_duration(83.45), "01:23")
+        self.assertEqual(format_column_duration(3723), "1:02:03")
 
     def test_format_size_helpers(self) -> None:
-        self.assertEqual(format_size(None), "—")
-        self.assertEqual(format_size(512), "512 B")
-        self.assertEqual(format_size(1536), "1.5 KB")
-        self.assertEqual(format_size(1048576), "1.0 MB")
-        self.assertEqual(format_size(5 * 1024**3), "5.0 GB")
+        self.assertEqual(format_column_size(None), "—")
+        self.assertEqual(format_column_size(512), "512 B")
+        self.assertEqual(format_column_size(1536), "1.5 KB")
+        self.assertEqual(format_column_size(1048576), "1.0 MB")
+        self.assertEqual(format_column_size(5 * 1024**3), "5.0 GB")
 
     def test_format_estimate_helpers(self) -> None:
         self.assertEqual(format_estimate(None), "—")

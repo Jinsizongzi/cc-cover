@@ -1395,7 +1395,8 @@ def estimate_processing_seconds(
     return int(math.ceil(seconds))
 
 
-def format_duration(seconds: float | None) -> str:
+def format_column_duration(seconds: float | None) -> str:
+    """候选列表「时长」列的 H:MM:SS 格式；与进度条的中文 format_duration 区分。"""
     if seconds is None:
         return "—"
     total = int(round(float(seconds)))
@@ -1406,7 +1407,8 @@ def format_duration(seconds: float | None) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def format_size(size_bytes: int | None) -> str:
+def format_column_size(size_bytes: int | None) -> str:
+    """候选列表「大小」列格式；与磁盘占用的 format_size 区分（None 显示 —）。"""
     if size_bytes is None:
         return "—"
     size = float(size_bytes)
