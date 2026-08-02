@@ -116,6 +116,39 @@ class DiscoverySemanticsTests(unittest.TestCase):
             [item.path.name for item in report.protected_texts], ["notes.txt"]
         )
 
+    def test_case_insensitive_target_collision_is_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "EPISODE.MP4").write_bytes(b"video")
+            (root / "episode.mkv").write_bytes(b"video")
+
+            report = discover([root], hash_videos=False)
+
+        self.assertEqual(report.video_count, 2)
+        self.assertEqual(report.conflict_count, 1)
+        self.assertEqual(len(report.candidates), 0)
+        conflict = report.conflicts[0]
+        self.assertEqual(
+            sorted(path.name for path in conflict.videos),
+            ["EPISODE.MP4", "episode.mkv"],
+        )
+
+    def test_video_in_nested_subdirectory_is_scanned_with_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subdir = root / "season" / "episodes"
+            subdir.mkdir(parents=True)
+            (subdir / "clip.mp4").write_bytes(b"video")
+            (subdir / "clip.txt").write_bytes(b"")
+
+            report = discover([root], hash_videos=False)
+
+        self.assertEqual(report.video_count, 1)
+        self.assertEqual(len(report.candidates), 1)
+        candidate = report.candidates[0]
+        self.assertEqual(candidate.video_path, (subdir / "clip.mp4").resolve())
+        self.assertEqual(candidate.root, root.resolve())
+
 
 if __name__ == "__main__":
     unittest.main()
