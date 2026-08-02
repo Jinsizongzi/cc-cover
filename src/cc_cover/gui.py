@@ -243,12 +243,13 @@ class CCCoverApp(ttk.Frame):
         try:
             return load_gui_settings(self.paths.data_root)
         except SettingsError as exc:
+            # exc 在 except 块退出后被 Python 删除，必须先把消息绑定出来，
+            # 否则延迟回调（after）执行时引用 exc 会抛 NameError，警告框不显示。
+            message = f"无法读取 settings.json，已使用默认设置。\n\n{exc}"
             self.master.after(
                 0,
                 lambda: messagebox.showwarning(
-                    "设置文件无效",
-                    f"无法读取 settings.json，已使用默认设置。\n\n{exc}",
-                    parent=self.master,
+                    "设置文件无效", message, parent=self.master
                 ),
             )
             return GuiSettings()
