@@ -16,13 +16,16 @@ from cc_cover.gui_support import (
     command_environment,
     configured_data_root,
     default_data_root,
+    detect_device_command,
     ensure_data_root,
     environment_check_command,
     environment_status_label,
     is_writable,
     load_gui_settings,
+    parsed_device,
     read_settings,
     resolve_data_root,
+    resolve_default_device,
     runtime_paths,
     scan_command,
     setup_commands,
@@ -431,7 +434,6 @@ class GuiPreferencesTests(unittest.TestCase):
             GuiSettings(
                 scan_path="",
                 device="auto",
-                accelerator="cuda",
                 ffmpeg="",
                 hash_videos=True,
             ),
@@ -443,7 +445,6 @@ class GuiPreferencesTests(unittest.TestCase):
             expected = GuiSettings(
                 scan_path="D:/视频",
                 device="cpu",
-                accelerator="cpu",
                 ffmpeg="C:/ffmpeg.exe",
                 hash_videos=False,
             )
@@ -468,7 +469,6 @@ class GuiPreferencesTests(unittest.TestCase):
             GuiSettings(
                 scan_path="",
                 device="cpu",
-                accelerator="cuda",
                 ffmpeg="",
                 hash_videos=True,
             ),
@@ -495,7 +495,6 @@ class GuiPreferencesTests(unittest.TestCase):
             GuiSettings(
                 scan_path="",
                 device="auto",
-                accelerator="cuda",
                 ffmpeg="",
                 hash_videos=True,
             ),
@@ -511,7 +510,6 @@ class GuiPreferencesTests(unittest.TestCase):
                 GuiSettings(
                     scan_path="C:/videos",
                     device="cuda",
-                    accelerator="cuda",
                     ffmpeg="",
                     hash_videos=True,
                 ),
@@ -521,6 +519,57 @@ class GuiPreferencesTests(unittest.TestCase):
         self.assertEqual(stored["data_root"], "D:/data")
         self.assertEqual(stored["scan_path"], "C:/videos")
         self.assertEqual(stored["device"], "cuda")
+
+    def test_load_migrates_legacy_accelerator_to_device(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_settings(root, {"accelerator": "cpu"})
+
+            settings = load_gui_settings(root)
+
+        self.assertEqual(settings.device, "cpu")
+
+    def test_load_prefers_legacy_accelerator_over_device_when_both_present(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_settings(root, {"device": "cpu", "accelerator": "cuda"})
+
+            settings = load_gui_settings(root)
+
+        self.assertEqual(settings.device, "cuda")
+
+    def test_load_keeps_valid_device_when_legacy_accelerator_is_invalid(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_settings(root, {"device": "cpu", "accelerator": "tpu"})
+
+            settings = load_gui_settings(root)
+
+        self.assertEqual(settings.device, "cpu")
+
+    def test_save_drops_legacy_accelerator_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_settings(root, {"accelerator": "cuda", "data_root": "D:/data"})
+
+            save_gui_settings(
+                root,
+                GuiSettings(
+                    scan_path="C:/videos",
+                    device="cpu",
+                    ffmpeg="",
+                    hash_videos=True,
+                ),
+            )
+
+            stored = read_settings(root)
+        self.assertNotIn("accelerator", stored)
+        self.assertEqual(stored["device"], "cpu")
+        self.assertEqual(stored["data_root"], "D:/data")
 
     def test_load_rejects_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -535,6 +584,43 @@ class GuiPreferencesTests(unittest.TestCase):
             settings_file(root).write_text("[1, 2]", encoding="utf-8")
             with self.assertRaises(SettingsError):
                 save_gui_settings(root, GuiSettings())
+
+
+class DeviceDetectionTests(unittest.TestCase):
+    def test_saved_choice_wins_over_detection(self) -> None:
+        self.assertEqual(resolve_default_device("cuda", "cpu"), "cuda")
+        self.assertEqual(resolve_default_device("cpu", "cuda"), "cpu")
+
+    def test_auto_follows_detected_device(self) -> None:
+        self.assertEqual(resolve_default_device("auto", "cuda"), "cuda")
+        self.assertEqual(resolve_default_device("auto", "cpu"), "cpu")
+
+    def test_auto_falls_back_to_cpu_without_detection(self) -> None:
+        self.assertEqual(resolve_default_device("auto", None), "cpu")
+        self.assertEqual(resolve_default_device("auto", "garbage"), "cpu")
+
+    def test_detect_command_probes_runtime_cuda(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True,
+                bundle_root=base / "bundle",
+                data_root=base / "data",
+            )
+            command = detect_device_command(paths)
+
+        self.assertEqual(command[0], str(paths.venv_python))
+        self.assertIn("torch.cuda.is_available()", command[-1])
+        self.assertIn("ctranslate2.get_cuda_device_count()", command[-1])
+        self.assertIn("print('cuda'", command[-1])
+
+    def test_parsed_device_accepts_cuda_and_cpu_output(self) -> None:
+        self.assertEqual(parsed_device("cuda\n"), "cuda")
+        self.assertEqual(parsed_device("cpu\n"), "cpu")
+
+    def test_parsed_device_rejects_unknown_output(self) -> None:
+        self.assertIsNone(parsed_device(""))
+        self.assertIsNone(parsed_device("无法检测"))
 
 
 if __name__ == "__main__":

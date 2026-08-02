@@ -14,6 +14,7 @@ from typing import Any, Callable
 from cc_cover import __version__
 from cc_cover.gui_support import (
     FailureInfo,
+    GUI_DEVICE_CHOICES,
     GuiSettings,
     GuiOptions,
     RuntimePaths,
@@ -21,6 +22,7 @@ from cc_cover.gui_support import (
     apply_data_root,
     command_environment,
     default_data_root,
+    detect_device_command,
     ensure_data_root,
     environment_check_command,
     environment_status_label,
@@ -28,9 +30,11 @@ from cc_cover.gui_support import (
     failure_info_from_command,
     first_failed_sample,
     load_gui_settings,
+    parsed_device,
     python_candidates,
     resume_command,
     resolve_data_root,
+    resolve_default_device,
     run_is_resumable,
     runtime_paths,
     save_gui_settings,
@@ -90,17 +94,17 @@ GUIDE_TEXT = """操作指南
 首次使用
 
 1. 打开 CC-Cover.exe；若程序所在目录不可写（例如安装到 Program Files），软件会先引导选择数据目录。
-2. 在“运行环境”区域选择 NVIDIA GPU 或 CPU。
+2. 软件会自动检测运行设备（有可用 GPU 默认 NVIDIA GPU，否则 CPU），也可在“运行环境”区域手动切换。
 3. 点击“安装 / 修复运行环境”。软件会自动创建隔离环境并安装所需组件，不需要打开命令行窗口。
 4. 等待状态显示“运行环境已就绪”。首次安装耗时取决于网络速度。
-5. 若从 CPU 改为 GPU（或反过来），必须再次点击“安装 / 修复运行环境”，否则会继续使用旧的 PyTorch 包。
+5. 切换运行设备后，软件会自动重新检查环境；如果当前环境不匹配所选设备，会提示重新安装 / 修复运行环境。
 
 补全字幕
 
 1. 点击“选择文件夹”，选择需要处理的视频目录。软件不会预设任何扫描路径。
 2. 选择目录后会自动进行快速扫描，也可以点击“重新扫描”。
 3. 在候选列表中确认待补全字幕；冲突项会标记“冲突”，默认不会处理。
-4. 根据需要调整推理设备、视频哈希保护与 FFmpeg 路径。
+4. 根据需要调整运行设备、视频哈希保护与 FFmpeg 路径。
 5. 点击“开始补全并替换”。软件将自动完成双模型识别、审计、格式化、备份、替换和最终复核。
 6. 在“运行日志”页查看实时进度。完成后可点击“打开运行目录”查看详细产物。
 
@@ -113,7 +117,7 @@ GUIDE_TEXT = """操作指南
 
 选项说明
 
-• 自动设备：优先使用可用 GPU，否则使用 CPU。
+• 运行设备：启动时自动检测默认值（有可用 GPU 默认 NVIDIA GPU，否则 CPU）；切换后自动复检环境。CLI 仍支持 --device auto/cuda/cpu。
 • 视频哈希保护：处理前计算视频 SHA-256，安全性更高，但首次扫描大型目录会更慢。
 • FFmpeg：通常无需指定；只有自动检测失败时才选择 ffmpeg.exe。
 • 数据目录：默认使用程序所在目录（便携模式），保存运行环境、模型缓存、运行记录与设置文件；可在“运行环境”区域点击“更改…”切换，切换后需重新安装运行环境，模型缓存可手动复制。
@@ -141,15 +145,21 @@ class CCCoverApp(ttk.Frame):
         self.last_report: dict[str, Any] | None = None
 
         settings = self._load_settings()
+        self._saved_device = settings.device
         self.scan_path = tk.StringVar(value=settings.scan_path)
-        self.device = tk.StringVar(value=settings.device)
-        self.accelerator = tk.StringVar(value=settings.accelerator)
+        self.device = tk.StringVar(
+            value=resolve_default_device(settings.device, None)
+        )
+        self.device_auto = settings.device not in GUI_DEVICE_CHOICES
         self.ffmpeg = tk.StringVar(value=settings.ffmpeg)
         self.hash_videos = tk.BooleanVar(value=settings.hash_videos)
         self.status = tk.StringVar(value="正在检查运行环境…")
         self.environment_status = tk.StringVar(value="检查中")
         self.summary = tk.StringVar(value="尚未选择扫描目录")
         self._save_after_id: str | None = None
+        self._applying_device_value = False
+        self._device_recheck_after_id: str | None = None
+        self._prompt_device_recheck = False
 
         self._configure_window()
         self._configure_styles()
@@ -157,11 +167,11 @@ class CCCoverApp(ttk.Frame):
         for variable in (
             self.scan_path,
             self.device,
-            self.accelerator,
             self.ffmpeg,
             self.hash_videos,
         ):
             variable.trace_add("write", self._on_settings_changed)
+        self.device.trace_add("write", self._on_device_changed)
         self.master.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_events)
         self.after(350, self.check_environment)
@@ -279,22 +289,25 @@ class CCCoverApp(ttk.Frame):
             style="Body.TLabel",
         )
         self.environment_label.grid(row=0, column=1, sticky="w", padx=(14, 0))
-        accelerator_box = ttk.Frame(environment_panel, style="Panel.TFrame")
-        accelerator_box.grid(row=0, column=2, padx=(12, 8))
-        self.accelerator_gpu_radio = ttk.Radiobutton(
-            accelerator_box,
+        device_box = ttk.Frame(environment_panel, style="Panel.TFrame")
+        device_box.grid(row=0, column=2, padx=(12, 8))
+        ttk.Label(
+            device_box, text="运行设备：", style="Body.TLabel"
+        ).pack(side="left")
+        self.device_gpu_radio = ttk.Radiobutton(
+            device_box,
             text="NVIDIA GPU",
-            variable=self.accelerator,
+            variable=self.device,
             value="cuda",
         )
-        self.accelerator_gpu_radio.pack(side="left")
-        self.accelerator_cpu_radio = ttk.Radiobutton(
-            accelerator_box,
+        self.device_gpu_radio.pack(side="left", padx=(6, 0))
+        self.device_cpu_radio = ttk.Radiobutton(
+            device_box,
             text="CPU",
-            variable=self.accelerator,
+            variable=self.device,
             value="cpu",
         )
-        self.accelerator_cpu_radio.pack(side="left", padx=(8, 0))
+        self.device_cpu_radio.pack(side="left", padx=(8, 0))
         self.setup_button = ttk.Button(
             environment_panel,
             text="安装 / 修复运行环境",
@@ -348,17 +361,6 @@ class CCCoverApp(ttk.Frame):
         )
         options_row = ttk.Frame(options_panel, style="Panel.TFrame")
         options_row.pack(fill="x", pady=(10, 0))
-        ttk.Label(options_row, text="推理设备：", style="Body.TLabel").pack(
-            side="left"
-        )
-        self.device_combo = ttk.Combobox(
-            options_row,
-            textvariable=self.device,
-            values=("auto", "cuda", "cpu"),
-            state="readonly",
-            width=9,
-        )
-        self.device_combo.pack(side="left", padx=(4, 18))
         self.hash_check = ttk.Checkbutton(
             options_row, text="视频哈希保护", variable=self.hash_videos
         )
@@ -495,7 +497,6 @@ class CCCoverApp(ttk.Frame):
         return GuiSettings(
             scan_path=self.scan_path.get().strip(),
             device=self.device.get(),
-            accelerator=self.accelerator.get(),
             ffmpeg=self.ffmpeg.get().strip(),
             hash_videos=self.hash_videos.get(),
         )
@@ -504,6 +505,33 @@ class CCCoverApp(ttk.Frame):
         if self._save_after_id is not None:
             self.after_cancel(self._save_after_id)
         self._save_after_id = self.after(400, self._save_settings)
+
+    def _on_device_changed(self, *_args: Any) -> None:
+        if self._applying_device_value:
+            return
+        self.device_auto = False
+        if self._device_recheck_after_id is not None:
+            self.after_cancel(self._device_recheck_after_id)
+        self._device_recheck_after_id = self.after(400, self._recheck_device)
+
+    def _recheck_device(self) -> None:
+        self._device_recheck_after_id = None
+        if self.busy:
+            self._device_recheck_after_id = self.after(400, self._recheck_device)
+            return
+        self._start_device_recheck()
+
+    def _recheck_detected_device(self) -> None:
+        if self.busy:
+            self.after(100, self._recheck_detected_device)
+            return
+        self._start_device_recheck()
+
+    def _start_device_recheck(self) -> None:
+        self.environment_ready = False
+        self.environment_status.set("正在检查运行设备…")
+        self._prompt_device_recheck = True
+        self.check_environment()
 
     def _save_settings(self) -> None:
         self._save_after_id = None
@@ -546,8 +574,8 @@ class CCCoverApp(ttk.Frame):
         self.busy = busy
         state = "disabled" if busy else "normal"
         for widget in (
-            self.accelerator_gpu_radio,
-            self.accelerator_cpu_radio,
+            self.device_gpu_radio,
+            self.device_cpu_radio,
             self.setup_button,
             self.data_root_button,
             self.path_entry,
@@ -560,7 +588,6 @@ class CCCoverApp(ttk.Frame):
             self.resume_button,
         ):
             widget.configure(state=state)
-        self.device_combo.configure(state="disabled" if busy else "readonly")
         self.cancel_button.configure(state="normal" if busy else "disabled")
         if busy:
             self.progress.start(10)
@@ -724,10 +751,10 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(("environment", (False, "尚未安装")))
                 self.events.put(("idle", "请先安装运行环境"))
                 return
-            accelerator = self.accelerator.get()
+            device = self.device.get()
             try:
                 output = self._run_capture(
-                    environment_check_command(self.paths, accelerator)
+                    environment_check_command(self.paths, device)
                 )
             except TaskCancelled as exc:
                 self.events.put(
@@ -743,22 +770,36 @@ class CCCoverApp(ttk.Frame):
                 detail = str(exc).strip() or "需要安装或修复"
                 label = (
                     "GPU 环境未就绪"
-                    if accelerator == "cuda"
+                    if device == "cuda"
                     else "需要安装或修复"
                 )
                 self.events.put(("environment", (False, label)))
                 self.events.put(("log", f"环境检查失败：{detail}\n"))
+                if self._prompt_device_recheck:
+                    self._prompt_device_recheck = False
+                    self.events.put(("device_check_failed", label))
             else:
                 self.events.put(
                     (
                         "environment",
-                        (True, environment_status_label(accelerator, output)),
+                        (True, environment_status_label(device, output)),
                     )
                 )
                 self.events.put(("log", output + "\n"))
+                self._detect_and_report()
             self.events.put(("idle", "就绪"))
 
         self._start_worker(worker, "正在检查运行环境…")
+
+    def _detect_and_report(self) -> None:
+        if not self.device_auto:
+            return
+        try:
+            output = self._run_capture(detect_device_command(self.paths))
+        except Exception:
+            output = ""
+        detected = parsed_device(output)
+        self.events.put(("device_detected", detected or "cpu"))
 
     def _find_base_python(self) -> list[str]:
         for candidate in python_candidates():
@@ -788,10 +829,10 @@ class CCCoverApp(ttk.Frame):
             try:
                 self.paths.data_root.mkdir(parents=True, exist_ok=True)
                 base_python = self._find_base_python()
-                accelerator = self.accelerator.get()
-                commands = setup_commands(self.paths, base_python, accelerator)
+                device = self.device.get()
+                commands = setup_commands(self.paths, base_python, device)
                 self.events.put(("log", "开始安装运行环境。此过程可能需要较长时间。\n"))
-                if accelerator == "cuda":
+                if device == "cuda":
                     self.events.put(
                         (
                             "log",
@@ -804,16 +845,17 @@ class CCCoverApp(ttk.Frame):
                     )
                     chunks.append(self._run_streaming(command))
                 output = self._run_capture(
-                    environment_check_command(self.paths, accelerator)
+                    environment_check_command(self.paths, device)
                 )
                 chunks.append(output)
                 self.events.put(("log", output + "\n"))
                 self.events.put(
                     (
                         "environment",
-                        (True, environment_status_label(accelerator, output)),
+                        (True, environment_status_label(device, output)),
                     )
                 )
+                self._detect_and_report()
                 self.events.put(
                     (
                         "done",
@@ -1274,6 +1316,29 @@ class CCCoverApp(ttk.Frame):
                     ready, label = payload
                     self.environment_ready = bool(ready)
                     self.environment_status.set(str(label))
+                elif event == "device_detected":
+                    if self.device_auto:
+                        resolved = resolve_default_device(
+                            self._saved_device, str(payload)
+                        )
+                        changed = resolved != self.device.get()
+                        self._applying_device_value = True
+                        self.device.set(resolved)
+                        self._applying_device_value = False
+                        self.device_auto = False
+                        if changed:
+                            self.after(0, self._recheck_detected_device)
+                elif event == "device_check_failed":
+                    self._prompt_device_recheck = False
+                    label = str(payload)
+                    repair = messagebox.askyesno(
+                        "运行设备已切换",
+                        f"当前运行环境无法匹配所选设备（{label}）。\n\n"
+                        "是否现在重新安装 / 修复运行环境？",
+                        parent=self.master,
+                    )
+                    if repair:
+                        self.setup_environment()
                 elif event == "idle":
                     self._set_busy(False, str(payload))
                 elif event == "done":

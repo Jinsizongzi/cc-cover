@@ -91,6 +91,14 @@ class CliTests(unittest.TestCase):
             with redirect_stderr(errors), self.assertRaises(SystemExit):
                 parser.parse_args(["transcribe", temporary, obsolete_flag])
 
+    def test_cli_device_choices_are_preserved(self) -> None:
+        parser = create_parser()
+        for choice in ("auto", "cuda", "cpu"):
+            arguments = parser.parse_args(
+                ["transcribe", "root", "--device", choice]
+            )
+            self.assertEqual(arguments.device, choice)
+
 
 if __name__ == "__main__":
     unittest.main()
