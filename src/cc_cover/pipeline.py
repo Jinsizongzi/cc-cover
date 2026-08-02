@@ -10,6 +10,7 @@ import sys
 import time
 import unicodedata
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -157,6 +158,13 @@ def build_summary_text(run_dir: Path) -> str:
     candidate_count = len(candidates) if isinstance(candidates, list) else 0
     excluded_videos = manifest.get("excluded_videos") or []
     excluded_count = len(excluded_videos) if isinstance(excluded_videos, list) else 0
+    discovery = manifest.get("discovery")
+    if isinstance(discovery, dict):
+        # 已排除 = 发现视频总数 - 候选数（同 stem 冲突、显式排除项均不进入候选）。
+        video_count = int(discovery.get("video_count") or 0)
+        discovered_candidates = int(discovery.get("candidate_count") or 0)
+        if video_count and discovered_candidates:
+            excluded_count = max(0, video_count - discovered_candidates)
 
     samples = (stage.get("samples") or []) if stage else []
     sample_dicts = [item for item in samples if isinstance(item, dict)]
@@ -237,6 +245,59 @@ def write_summary(run_dir: Path) -> Path:
     path = run_dir / SUMMARY_FILENAME
     write_bytes_atomic(path, build_summary_text(run_dir).encode("utf-8"))
     return path
+
+
+@dataclass(frozen=True)
+class CompletionStats:
+    """完成弹窗展示的运行结果统计。"""
+
+    elapsed_seconds: float | None
+    written_count: int
+    warning_count: int
+
+
+def _timestamp_epoch(value: Any) -> float | None:
+    """ISO 时间戳转 epoch 秒；缺失或不可解析时返回 None。"""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def run_completion_stats(run_dir: Path) -> CompletionStats:
+    """从运行产物读取完成弹窗需要的统计：总耗时、写回数、告警数。"""
+    run_dir = run_dir.expanduser().resolve()
+    manifest = load_optional_json(run_dir / "manifest.json")
+    commit = load_optional_json(run_dir / "commit_report.json")
+    stage = load_optional_json(run_dir / "stage_report.json")
+
+    started = _timestamp_epoch(manifest.get("created_at_utc") if manifest else None)
+    ended_raw = None
+    if commit is not None:
+        ended_raw = commit.get("committed_at_utc")
+    if ended_raw is None and manifest is not None:
+        ended_raw = manifest.get("updated_at_utc")
+    ended = _timestamp_epoch(ended_raw)
+    elapsed = ended - started if started is not None and ended is not None else None
+
+    written = 0
+    if commit is not None:
+        written = int(commit.get("entry_count") or 0)
+        entries = commit.get("entries")
+        if not written and isinstance(entries, list):
+            written = len(entries)
+
+    warnings = int(stage.get("warning_count") or 0) if stage else 0
+    return CompletionStats(
+        elapsed_seconds=elapsed,
+        written_count=written,
+        warning_count=warnings,
+    )
 
 
 def options_to_dict(options: PipelineOptions) -> dict[str, Any]:

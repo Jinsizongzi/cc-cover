@@ -187,6 +187,30 @@ class BuildSummaryTextTests(unittest.TestCase):
         self.assertIn("状态：已准备（prepared）", text)
         self.assertIn("已排除：2（本次不处理）", text)
 
+    def test_excluded_count_flows_from_discovery_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "conflict-run"
+            run_dir.mkdir()
+            write_json_atomic(
+                run_dir / "manifest.json",
+                {
+                    "run_id": "conflict-run",
+                    "status": "committed",
+                    "created_at_utc": "2026-08-02T21:30:00+00:00",
+                    "updated_at_utc": "2026-08-02T21:46:00+00:00",
+                    "candidates": [{"sample_id": "CC-CANDIDATE-00001"}],
+                    "discovery": {
+                        "video_count": 5,
+                        "candidate_count": 3,
+                    },
+                },
+            )
+
+            text = build_summary_text(run_dir)
+
+        self.assertIn("候选总数：1", text)
+        self.assertIn("已排除：2（本次不处理）", text)
+
     def test_stopped_run_still_yields_coherent_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary) / "20260802_230000_5"
