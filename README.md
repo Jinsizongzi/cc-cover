@@ -1,8 +1,13 @@
 # CC-Cover
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Jinsizongzi/cc-cover)](https://github.com/Jinsizongzi/cc-cover/releases)
+
 CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选择需要扫描的视频文件夹，CC-Cover 会把所有视频作为候选，为每个视频生成同名 TXT 字幕：无论同名 TXT 是否存在、是否为空或已有内容，都会使用 FunASR 与 faster-whisper 生成和审计字幕，按固定格式输出，并在校验通过后直接替换或创建同名 TXT。
 
 软件不预设任何扫描目录，不需要 PowerShell、CMD 或额外写回参数。
+
+![CC-Cover 主界面](docs/screenshots/main.png)
 
 ## 下载与启动
 
@@ -26,7 +31,11 @@ CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选�
 5. 在“运行日志”页面查看双模型处理进度。
 6. 完成后查看提示，或点击“打开运行目录”检查审计报告与备份。
 
-软件内部提供完整的“功能说明”和“操作指南”页面。
+软件内部提供完整的“功能说明”和“操作指南”页面（界面底部标签页）。
+
+![功能说明](docs/screenshots/features.png)
+
+![操作指南](docs/screenshots/guide.png)
 
 ## 主要功能
 
@@ -71,6 +80,55 @@ CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选�
 - `verification.json`：最终复核报告。
 - `summary.txt`：人读运行摘要（起止时间、总数、成功/失败/告警明细、写回清单与路径）。
 
+## 系统要求
+
+- Windows 10 或 Windows 11。
+- Python 3.10、3.11 或 3.12。首次安装环境时由软件自动检测。
+- NVIDIA GPU 推荐；没有兼容 GPU 时可选择 CPU。
+- 磁盘空间：首次安装运行环境并下载默认模型，约需 **CPU 5.8GB / NVIDIA GPU 8.5GB**（安装前软件会按所选设备与数据根所在磁盘自动预检）。另需为视频、抽出的音频与运行产物预留空间，运行目录占用过高时可用「运行目录清理」回收。
+- 网络与时长：首次安装依赖（pip）与首次运行下载模型（FunASR、faster-whisper）都需要联网；耗时主要取决于带宽，安装界面会显示当前组件、已下载大小与按速度粗估的剩余时间。
+
+## 常见问题与排错（FAQ）
+
+### 运行 exe 时 Windows 提示“Windows 已保护你的电脑”（SmartScreen）
+
+当前发布物未购买代码签名证书，首次运行可能出现 SmartScreen 拦截。点击“更多信息” → “仍要运行”即可。请从官方 [Releases](https://github.com/Jinsizongzi/cc-cover/releases) 页面下载，不要使用来路不明的副本。付费签名（Azure Trusted Signing / OV）已列入后续计划。
+
+### 杀毒软件报毒
+
+未签名程序可能被个别杀软误报。处理步骤：
+
+1. 确认文件来自官方 Releases 页，与发布说明中的版本、大小一致（可另用文件哈希比对）。
+2. 将误报程序提交给对应厂商申诉。常用入口：
+   - Microsoft：[Microsoft 安全智能误报提交](https://www.microsoft.com/wdsi/filesubmission)（选择“误报”）。
+   - 360：360 软件误报申诉平台。
+   - 火绒：火绒安全误报反馈。
+
+### 安装运行环境时模型或依赖下载失败
+
+首次安装会联网下载 PyTorch 等依赖，首次运行会下载 FunASR（ModelScope）与 faster-whisper（HuggingFace）模型到数据根 `model-cache\funasr`、`model-cache\faster-whisper`。失败常见原因与处理：
+
+- 网络不通或代理问题：确认可正常访问外网；如有代理，让软件进程走系统代理。
+- 磁盘空间不足：参考「系统要求」预留空间，并用「运行目录清理」腾出空间。
+- 部分下载中断：重新点击“安装 / 修复运行环境”或重新运行，已下载部分可复用。
+
+### 提示抽音频失败或找不到 FFmpeg
+
+转写前需要把视频抽出音频。软件默认使用内置 FFmpeg；若视频损坏、编码不受支持，或指定了不可用的 FFmpeg，会在此步失败。处理：
+
+- 确认视频本身可以正常播放（用播放器验证）。
+- 在“处理选项”的“FFmpeg（通常留空）”里用“选择文件”指定一个可用的 `ffmpeg.exe`。
+- 命令行方式可用 `--ffmpeg <路径>` 或环境变量 `CC_COVER_FFMPEG` 指定。
+
+### 检测不到 GPU / GPU 不可用
+
+软件启动时用 `nvidia-smi` 自动检测显卡，只有 NVIDIA GPU 才会默认选“NVIDIA GPU”。检测不到时：
+
+- 确认显卡是 NVIDIA 且驱动已安装、可被系统识别（可在设备管理器中查看）。
+- 更新 NVIDIA 显卡驱动。
+- 确认安装的是对应 CUDA 版运行环境（CUDA 版约 8.5GB，比 CPU 版大）；必要时点击“安装 / 修复运行环境”重新安装。
+- 没有兼容 GPU 就直接选“CPU”，速度会慢一些，但功能完整。
+
 ## 卸载与残留数据
 
 卸载可执行文件不会自动删除本地数据。软件首次安装与运行会在数据根下生成 `venv\`、`model-cache\`、`runs\`、`temp\` 与 `settings.json`。如需彻底清除：
@@ -79,13 +137,11 @@ CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选�
 - 手动删除数据根目录：默认是 CC-Cover.exe 所在目录；若在「运行环境」区域配置过自定义数据根，则删除对应目录。
 - 若默认数据根不可写，数据根指针会回退到 `%LOCALAPPDATA%\CC-Cover`，请一并删除。
 
-## 系统要求
-
-- Windows 10 或 Windows 11。
-- Python 3.10、3.11 或 3.12。首次安装环境时由软件自动检测。
-- NVIDIA GPU 推荐；没有兼容 GPU 时可选择 CPU。
-- 首次安装建议预留充足磁盘空间用于 PyTorch 和语音模型。
-
 ## 开发验证
 
-项目使用 Python `unittest` 覆盖扫描、固定格式渲染与校验、安全写回辅助函数、GUI 命令构建和无默认路径契约。GitHub Actions 会运行单元测试，并在 Windows 环境构建 `CC-Cover.exe`。
+项目使用 Python `unittest` 覆盖扫描、固定格式渲染与校验、安全写回辅助函数、GUI 命令构建和无默认路径契约。GitHub Actions 在 ubuntu 与 Windows 双平台并行运行单元测试（Windows 上同时包含 GUI 冒烟测试），并在 Windows 环境构建 `CC-Cover.exe`。
+
+## 许可与更新日志
+
+- 本项目基于 [MIT 许可](LICENSE) 发布。
+- 版本变更见 [CHANGELOG.md](CHANGELOG.md)。
