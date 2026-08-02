@@ -16,7 +16,11 @@ from cc_cover.gui_support import (
     FailureInfo,
     GuiOptions,
     RuntimePaths,
+    SettingsError,
+    apply_data_root,
     command_environment,
+    default_data_root,
+    ensure_data_root,
     environment_check_command,
     environment_status_label,
     error_text,
@@ -24,6 +28,7 @@ from cc_cover.gui_support import (
     first_failed_sample,
     python_candidates,
     resume_command,
+    resolve_data_root,
     run_is_resumable,
     runtime_paths,
     scan_command,
@@ -81,7 +86,7 @@ GUIDE_TEXT = """操作指南
 
 首次使用
 
-1. 打开 CC-Cover.exe。
+1. 打开 CC-Cover.exe；若程序所在目录不可写（例如安装到 Program Files），软件会先引导选择数据目录。
 2. 在“运行环境”区域选择 NVIDIA GPU 或 CPU。
 3. 点击“安装 / 修复运行环境”。软件会自动创建隔离环境并安装所需组件，不需要打开命令行窗口。
 4. 等待状态显示“运行环境已就绪”。首次安装耗时取决于网络速度。
@@ -108,6 +113,7 @@ GUIDE_TEXT = """操作指南
 • 自动设备：优先使用可用 GPU，否则使用 CPU。
 • 视频哈希保护：处理前计算视频 SHA-256，安全性更高，但首次扫描大型目录会更慢。
 • FFmpeg：通常无需指定；只有自动检测失败时才选择 ffmpeg.exe。
+• 数据目录：默认使用程序所在目录（便携模式），保存运行环境、模型缓存、运行记录与设置文件；可在“运行环境”区域点击“更改…”切换，切换后需重新安装运行环境，模型缓存可手动复制。
 
 注意事项
 
@@ -122,6 +128,7 @@ class CCCoverApp(ttk.Frame):
         super().__init__(master, padding=0)
         self.master = master
         self.paths = paths
+        self.default_root = default_data_root()
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.process: subprocess.Popen[str] | None = None
         self.busy = False
@@ -266,6 +273,23 @@ class CCCoverApp(ttk.Frame):
             command=self.setup_environment,
         )
         self.setup_button.grid(row=0, column=3, sticky="e")
+        self.data_root_path = tk.StringVar(value=str(self.paths.data_root))
+        ttk.Label(
+            environment_panel, text="数据目录：", style="Body.TLabel"
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(
+            environment_panel,
+            textvariable=self.data_root_path,
+            style="Body.TLabel",
+            wraplength=380,
+            justify="left",
+        ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(14, 0), pady=(8, 0))
+        self.data_root_button = ttk.Button(
+            environment_panel,
+            text="更改…",
+            command=self.change_data_root,
+        )
+        self.data_root_button.grid(row=1, column=3, sticky="e", pady=(8, 0))
 
         path_panel = self._panel(self.work_tab)
         path_panel.columnconfigure(0, weight=1)
@@ -459,6 +483,7 @@ class CCCoverApp(ttk.Frame):
         state = "disabled" if busy else "normal"
         for widget in (
             self.setup_button,
+            self.data_root_button,
             self.choose_button,
             self.scan_button,
             self.start_button,
@@ -574,6 +599,52 @@ class CCCoverApp(ttk.Frame):
         )
         if selected:
             self.ffmpeg.set(selected)
+
+    def change_data_root(self) -> None:
+        if self.busy:
+            return
+        confirmed = messagebox.askyesno(
+            "更改数据根",
+            "更改数据根后：\n\n"
+            "• 新目录需要重新安装运行环境（venv 不自动迁移）；\n"
+            "• 模型缓存不会自动迁移，可手动复制到新目录以跳过重新下载；\n"
+            "• 旧目录中的设置文件与运行记录会保留。\n\n"
+            "确定继续吗？",
+            parent=self.master,
+        )
+        if not confirmed:
+            return
+        selected = filedialog.askdirectory(
+            parent=self.master,
+            title="选择新的数据目录",
+            initialdir=str(self.paths.data_root),
+            mustexist=True,
+        )
+        if not selected:
+            return
+        try:
+            new_root = apply_data_root(
+                self.default_root, self.paths.data_root, Path(selected)
+            )
+        except (OSError, SettingsError) as exc:
+            messagebox.showerror("更改数据根失败", str(exc), parent=self.master)
+            return
+        self.paths = runtime_paths(data_root=new_root)
+        try:
+            ensure_data_root(self.paths)
+        except OSError as exc:
+            messagebox.showerror("无法创建数据目录", str(exc), parent=self.master)
+            return
+        self.data_root_path.set(str(self.paths.data_root))
+        self.environment_ready = False
+        self.environment_status.set("需要重新安装")
+        messagebox.showinfo(
+            "数据根已更改",
+            f"数据根已切换为：\n{self.paths.data_root}\n\n"
+            "请点击“安装 / 修复运行环境”在新目录安装运行环境。\n"
+            f"如需保留已下载的模型，请手动复制到：\n{self.paths.model_cache}",
+            parent=self.master,
+        )
 
     def check_environment(self) -> None:
         def worker() -> None:
@@ -1165,10 +1236,51 @@ class CCCoverApp(ttk.Frame):
 
 
 def main() -> None:
-    paths = runtime_paths()
-    paths.data_root.mkdir(parents=True, exist_ok=True)
+    default_root = default_data_root()
     root = tk.Tk()
+    root.withdraw()
+    try:
+        resolution = resolve_data_root(default_root)
+    except SettingsError as exc:
+        messagebox.showerror("设置文件无效", str(exc), parent=root)
+        root.destroy()
+        return
+    if resolution.needs_choice:
+        messagebox.showinfo(
+            "选择数据目录",
+            "CC-Cover 无法在程序所在目录或已配置的数据目录中保存数据"
+            "（目录不可写或不可用）。\n\n请选择一个新的数据目录（例如"
+            "其他磁盘上的 CC-Cover-Data 文件夹）。",
+            parent=root,
+        )
+        selected = filedialog.askdirectory(
+            parent=root,
+            title="选择数据目录",
+            initialdir=str(Path.home()),
+            mustexist=True,
+        )
+        if not selected:
+            root.destroy()
+            return
+        try:
+            active_root = apply_data_root(
+                default_root, resolution.root, Path(selected)
+            )
+        except (OSError, SettingsError) as exc:
+            messagebox.showerror("无法使用所选目录", str(exc), parent=root)
+            root.destroy()
+            return
+    else:
+        active_root = resolution.root
+    paths = runtime_paths(data_root=active_root)
+    try:
+        ensure_data_root(paths)
+    except OSError as exc:
+        messagebox.showerror("无法创建数据目录", str(exc), parent=root)
+        root.destroy()
+        return
     CCCoverApp(root, paths)
+    root.deiconify()
     root.mainloop()
 
 

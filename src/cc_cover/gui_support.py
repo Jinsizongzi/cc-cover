@@ -6,12 +6,15 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
 APP_DATA_DIRECTORY = "CC-Cover"
+SETTINGS_FILENAME = "settings.json"
+DATA_ROOT_KEY = "data_root"
 TORCH_VERSION = "2.5.1"
 ASR_DEPENDENCIES = (
     "imageio-ffmpeg>=0.6,<1",
@@ -36,6 +39,10 @@ class FailureInfo:
     total_count: int | None = None
 
 
+class SettingsError(RuntimeError):
+    """设置文件无效（JSON 损坏或顶层不是对象）时抛出。"""
+
+
 @dataclass(frozen=True)
 class RuntimePaths:
     source_root: Path
@@ -44,6 +51,13 @@ class RuntimePaths:
     venv_python: Path
     model_cache: Path
     runs_root: Path
+    temp_root: Path
+
+
+@dataclass(frozen=True)
+class DataRootResolution:
+    root: Path
+    needs_choice: bool
 
 
 @dataclass(frozen=True)
@@ -228,11 +242,28 @@ def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
     process.terminate()
 
 
+def default_data_root(
+    *,
+    frozen: bool | None = None,
+    bundle_root: Path | None = None,
+    app_dir: Path | None = None,
+) -> Path:
+    """数据根默认位置：打包后为 exe 所在目录，开发模式为项目根目录。"""
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
+    if app_dir is not None:
+        return Path(app_dir).expanduser().resolve()
+    if is_frozen:
+        return Path(sys.executable).resolve().parent
+    if bundle_root is None:
+        bundle_root = Path(__file__).resolve().parents[2]
+    return Path(bundle_root).resolve()
+
+
 def runtime_paths(
     *,
     frozen: bool | None = None,
     bundle_root: Path | None = None,
-    local_app_data: Path | None = None,
+    data_root: Path | None = None,
 ) -> RuntimePaths:
     is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     if bundle_root is None:
@@ -243,24 +274,148 @@ def runtime_paths(
     source_root = (
         bundle_root / "src" if is_frozen else bundle_root.resolve() / "src"
     ).resolve()
-    if local_app_data is None:
-        environment = os.environ.get("LOCALAPPDATA")
-        local_app_data = (
-            Path(environment)
-            if environment
-            else Path.home() / "AppData" / "Local"
-        )
-    data_root = (local_app_data / APP_DATA_DIRECTORY).resolve()
-    venv_root = data_root / ".venv"
+    if data_root is None:
+        data_root = default_data_root(frozen=is_frozen, bundle_root=bundle_root)
+    resolved_data_root = Path(data_root).expanduser().resolve()
+    venv_root = resolved_data_root / "venv"
     return RuntimePaths(
         source_root=source_root,
-        data_root=data_root,
+        data_root=resolved_data_root,
         venv_root=venv_root,
         venv_python=venv_root / "Scripts" / "python.exe",
-        model_cache=data_root / "model-cache",
-        runs_root=data_root / "runs",
+        model_cache=resolved_data_root / "model-cache",
+        runs_root=resolved_data_root / "runs",
+        temp_root=resolved_data_root / "temp",
     )
 
+
+def ensure_data_root(paths: RuntimePaths) -> None:
+    """创建数据根与固定子目录：venv、model-cache、runs、temp。"""
+    for directory in (
+        paths.data_root,
+        paths.venv_root,
+        paths.model_cache,
+        paths.runs_root,
+        paths.temp_root,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+
+
+def settings_file(data_root: Path) -> Path:
+    """数据根内固定位置：<data_root>/settings.json。"""
+    return Path(data_root).expanduser().resolve() / SETTINGS_FILENAME
+
+
+def read_settings(data_root: Path) -> dict[str, Any]:
+    """读取数据根下的设置文件；文件不存在时返回空字典。"""
+    path = settings_file(data_root)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (FileNotFoundError, NotADirectoryError):
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SettingsError(f"设置文件无效：{path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise SettingsError(f"设置文件顶层必须是 JSON 对象：{path}")
+    return value
+
+
+def write_settings(data_root: Path, values: Mapping[str, Any]) -> None:
+    """原子写入数据根下的设置文件（UTF-8）。"""
+    root = Path(data_root).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    path = settings_file(root)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(dict(values), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def is_writable(directory: Path) -> bool:
+    """探测目录可写性：实际创建并删除一个探测文件，失败返回 False。"""
+    target = Path(directory).expanduser().resolve()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        probe = target / f".cc-cover-write-probe-{uuid.uuid4().hex}"
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def fallback_pointer_root() -> Path:
+    """默认根不可写时，数据根指针的回退位置（用户本地应用数据目录）。"""
+    environment = os.environ.get("LOCALAPPDATA")
+    local = Path(environment) if environment else Path.home() / "AppData" / "Local"
+    return (local / APP_DATA_DIRECTORY).resolve()
+
+
+def pointer_root(default_root: Path) -> Path:
+    """数据根指针所在目录：默认根可写时用默认根，否则用用户可写的回退位置。"""
+    default_root = Path(default_root).expanduser().resolve()
+    if settings_file(default_root).exists() or is_writable(default_root):
+        return default_root
+    return fallback_pointer_root()
+
+
+def configured_data_root(default_root: Path) -> Path:
+    """从数据根指针读取自定义数据根；未配置或非绝对路径时返回默认根。"""
+    default_root = Path(default_root).expanduser().resolve()
+    value = read_settings(pointer_root(default_root)).get(DATA_ROOT_KEY)
+    if value in (None, ""):
+        return default_root
+    path = Path(str(value)).expanduser()
+    if not path.is_absolute():
+        return default_root
+    return path.resolve()
+
+
+def resolve_data_root(default_root: Path) -> DataRootResolution:
+    """解析启动时使用的数据根；默认根不可写且未配置自定义根时引导选择。"""
+    default_root = Path(default_root).expanduser().resolve()
+    configured = configured_data_root(default_root)
+    if configured != default_root:
+        return DataRootResolution(
+            root=configured, needs_choice=not is_writable(configured)
+        )
+    return DataRootResolution(
+        root=default_root, needs_choice=not is_writable(default_root)
+    )
+
+
+def apply_data_root(
+    default_root: Path,
+    previous_root: Path,
+    new_root: Path,
+) -> Path:
+    """切换数据根：设置文件复制到新根并更新指针，旧文件保留不删除。
+
+    换回默认根时只清除指针；环境与模型缓存不做自动迁移。
+    """
+    default_root = Path(default_root).expanduser().resolve()
+    previous_root = Path(previous_root).expanduser().resolve()
+    new_root = Path(new_root).expanduser().resolve()
+    if new_root == default_root:
+        pointer = pointer_root(default_root)
+        values = read_settings(pointer)
+        values.pop(DATA_ROOT_KEY, None)
+        write_settings(pointer, values)
+        return default_root
+    values = dict(read_settings(previous_root))
+    values[DATA_ROOT_KEY] = str(new_root)
+    write_settings(new_root, values)
+    pointer = pointer_root(default_root)
+    pointer_values = read_settings(pointer)
+    pointer_values[DATA_ROOT_KEY] = str(new_root)
+    write_settings(pointer, pointer_values)
+    return new_root
 
 def command_environment(
     paths: RuntimePaths, inherited: Mapping[str, str] | None = None
