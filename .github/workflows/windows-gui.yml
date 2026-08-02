@@ -18,16 +18,70 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m pip install --upgrade pip pyinstaller
-      - name: Build Windows GUI
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+      - name: Resolve version & generate version resource
+        id: version
+        shell: pwsh
+        run: |
+          python packaging/build_version_info.py
+          "version=$(python packaging/build_version_info.py --version)" >> $env:GITHUB_OUTPUT
+      - name: Build Windows GUI (onedir)
         run: >-
-          pyinstaller --noconfirm --clean --onefile --windowed
-          --name CC-Cover --paths src --add-data "src;src" gui_launcher.py
+          pyinstaller --noconfirm --clean --onedir --noupx --windowed
+          --name CC-Cover --paths src --add-data "src;src"
+          --icon assets/app.ico --version-file packaging/version_info.txt
+          --exclude-module torch --exclude-module torchaudio
+          --exclude-module torchvision --exclude-module tensorflow
+          --exclude-module funasr --exclude-module modelscope
+          --exclude-module faster_whisper --exclude-module ctranslate2
+          --exclude-module imageio_ffmpeg --exclude-module onnxruntime
+          --exclude-module soundfile --exclude-module transformers
+          --exclude-module librosa
+          gui_launcher.py
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+      - name: Compile installer
+        run: iscc.exe /DMyAppVersion=${{ steps.version.outputs.version }} packaging\CC-Cover.iss
+      - name: Pack portable zip
+        shell: pwsh
+        run: >-
+          Compress-Archive -Path dist\CC-Cover
+          -DestinationPath dist\CC-Cover-${{ steps.version.outputs.version }}-portable.zip
+      - name: Smoke test installer (silent install & uninstall)
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem "dist\CC-Cover-Setup-*.exe" | Select-Object -First 1
+          if (-not $setup) { throw "installer not found" }
+          $dir = Join-Path $env:TEMP "cc-cover-install-smoke"
+          if (Test-Path $dir) { Remove-Item -Recurse -Force $dir }
+          $install = Start-Process -FilePath $setup.FullName `
+            -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=$dir" `
+            -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "installer exit code $($install.ExitCode)" }
+          $exe = Join-Path $dir "CC-Cover.exe"
+          for ($i = 0; $i -lt 30 -and -not (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
+          if (-not (Test-Path $exe)) { throw "CC-Cover.exe missing after install" }
+          $uninstall = Start-Process -FilePath (Join-Path $dir "unins000.exe") `
+            -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" `
+            -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "uninstaller exit code $($uninstall.ExitCode)" }
+      - name: Smoke test portable exe (launch & stay-alive)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\CC-Cover\CC-Cover.exe" -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { throw "CC-Cover.exe exited early (code $($p.ExitCode))" }
+          Stop-Process -Id $p.Id -Force
       - uses: actions/upload-artifact@v4
         with:
           name: CC-Cover-Windows
-          path: dist/CC-Cover.exe
+          path: |
+            dist/CC-Cover-Setup-*.exe
+            dist/CC-Cover-*-portable.zip
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: dist/CC-Cover.exe
+          files: |
+            dist/CC-Cover-Setup-*.exe
+            dist/CC-Cover-*-portable.zip
