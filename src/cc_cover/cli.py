@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -67,6 +68,42 @@ def resolve_path(value: Any, base: Path) -> Path | None:
     if not path.is_absolute():
         path = base / path
     return path.resolve()
+
+
+def load_exclusions(path: Path | None) -> set[Path]:
+    """读取排除文件：JSON 数组，每一项是一个视频路径字符串。"""
+    if path is None:
+        return set()
+    resolved = path.expanduser().resolve()
+    try:
+        value = json.loads(resolved.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError as exc:
+        raise ConfigError(f"排除文件不存在：{resolved}") from exc
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"排除文件 JSON 无效：{resolved}: {exc}") from exc
+    if not isinstance(value, list):
+        raise ConfigError("排除文件顶层必须是 JSON 数组（视频路径字符串列表）")
+    excluded: set[Path] = set()
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError("排除文件每一项必须是视频路径字符串")
+        excluded.add(Path(item).expanduser().resolve())
+    return excluded
+
+
+def apply_exclusions(
+    report: DiscoveryReport, excluded: set[Path]
+) -> DiscoveryReport:
+    if not excluded:
+        return report
+    return replace(
+        report,
+        candidates=tuple(
+            candidate
+            for candidate in report.candidates
+            if candidate.video_path not in excluded
+        ),
+    )
 
 
 def option_value(
@@ -135,6 +172,8 @@ def report_payload(report: DiscoveryReport) -> dict[str, Any]:
                 "state": item.initial_state,
                 "video_path": str(item.video_path),
                 "target_path": str(item.target_path),
+                "video_duration_s": item.video_duration_s,
+                "video_size": item.video_fingerprint.size,
             }
             for item in report.candidates
         ],
@@ -207,6 +246,11 @@ def create_parser() -> argparse.ArgumentParser:
     transcribe = commands.add_parser("transcribe", help="生成、校验并写回字幕")
     add_discovery_arguments(transcribe)
     add_pipeline_arguments(transcribe)
+    transcribe.add_argument(
+        "--exclude",
+        type=Path,
+        help="JSON 文件：本次不处理的视频路径列表",
+    )
 
     resume = commands.add_parser("resume", help="继续已有运行")
     resume.add_argument("run_dir", type=Path, help="包含 manifest.json 的运行目录")
@@ -231,11 +275,25 @@ def command_transcribe(arguments: argparse.Namespace) -> int:
     config, config_base = load_config(arguments.config)
     options = build_options(arguments, config, config_base)
     report = discover_for_options(options)
-    print_report(report)
-    if not report.candidates:
-        print("没有可处理的候选视频（同 stem 冲突已排除），无需处理。")
+    excluded = load_exclusions(arguments.exclude)
+    filtered_report = apply_exclusions(report, excluded)
+    excluded_matches = [
+        candidate
+        for candidate in report.candidates
+        if candidate.video_path in excluded
+    ]
+    print_report(filtered_report)
+    if excluded_matches:
+        print(f"已排除：{len(excluded_matches)} 个候选（本次不处理、不写回）")
+        print(f"实际处理：{len(filtered_report.candidates)} 个候选")
+    if not filtered_report.candidates:
+        print("没有可处理的候选视频（冲突与已排除项除外），无需处理。")
         return 0
-    pipeline = SubtitlePipeline.create(options, report)
+    pipeline = SubtitlePipeline.create(
+        options,
+        filtered_report,
+        excluded_videos=sorted(path.resolve() for path in excluded),
+    )
     print(f"运行目录：{pipeline.run_dir}")
     pipeline.execute()
     print(f"字幕已写回并复核通过：{pipeline.run_dir}")

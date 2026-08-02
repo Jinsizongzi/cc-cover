@@ -4,6 +4,7 @@ import json
 import os
 import queue
 import subprocess
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -41,10 +42,14 @@ from cc_cover.gui_support import (
     environment_status_label,
     error_text,
     estimate_install_required_bytes,
+    estimate_processing_seconds,
     failure_info_from_command,
     first_failed_sample,
     focus_existing_window,
+    format_column_duration,
+    format_column_size,
     format_duration,
+    format_estimate,
     format_size,
     install_download_bytes,
     install_progress_text,
@@ -67,6 +72,7 @@ from cc_cover.gui_support import (
     save_gui_settings,
     scan_command,
     scan_confirmation_stats,
+    selection_summary,
     setup_commands,
     should_play_completion_sound,
     stopped_message,
@@ -119,13 +125,16 @@ UTF-8 无 BOM、CRLF 换行、末尾换行。
 5. 冲突检测
 发现阶段检测同 stem 多视频指向同一目标 TXT 的冲突，标记“冲突”并默认排除，报告列出相关视频。
 
-6. 写回保护
+6. 候选勾选与排除
+候选列表提供复选框与“全选”（默认全选）；右键可“从本次处理中排除 / 恢复”、打开视频或目标 TXT 所在位置。被排除候选显示“已排除”，本次不处理、不写回。列表同时展示视频时长、文件大小与粗估处理时间。
+
+7. 写回保护
 处理前记录视频和字幕快照；写回前复核文件状态；写回时先保存备份；批量写回失败会自动回滚。
 
-7. 可恢复运行
-模型结果、审计报告、待写字幕、备份与复核报告都保存在运行目录，可点击“继续中断任务”恢复。
+8. 可恢复运行
+模型结果、审计报告、待写字幕、备份和复核报告都会保存在运行目录。中断后可通过“继续中断任务”选择运行目录继续。
 
-8. 本地处理
+9. 本地处理
 视频、音频和字幕均在本机处理。只有首次安装依赖或首次下载模型时需要联网。"""
 
 
@@ -148,7 +157,7 @@ GUIDE_TEXT = """操作指南
 
 1. 点击“选择文件夹”，选择需要处理的视频目录。软件不会预设任何扫描路径。
 2. 选择目录后会自动进行快速扫描，也可以点击“重新扫描”。
-3. 在候选列表中确认待补全字幕；冲突项会标记“冲突”，默认不会处理。
+3. 在候选列表中通过复选框勾选本次要处理的视频（默认全选）；右键可排除 / 恢复、打开视频或目标 TXT 所在位置；冲突项会标记“冲突”，默认不会处理。列表会显示视频时长、文件大小与粗估处理时间。
 4. 根据需要调整运行设备、视频哈希保护与 FFmpeg 路径。
 5. 点击“开始补全并替换”。软件会先弹出确认框（将处理 N 个视频并替换同名 TXT，含已排除数量，
 替换前自动备份）；确认后自动完成双模型识别、审计、格式化、备份、替换和最终复核。
@@ -200,6 +209,10 @@ class CCCoverApp(ttk.Frame):
         self.stop_triggered = False
         self.environment_ready = False
         self.last_report: dict[str, Any] | None = None
+        self.checked_paths: set[str] = set()
+        self.candidate_row_video: dict[str, str] = {}
+        self.original_state_by_row: dict[str, str] = {}
+        self.conflict_row_ids: set[str] = set()
 
         settings = self._load_settings()
         self._saved_device = settings.device
@@ -485,21 +498,52 @@ class CCCoverApp(ttk.Frame):
         ttk.Label(candidate_panel, text="扫描结果", style="Section.TLabel").grid(
             row=0, column=0, sticky="w"
         )
+        selection_row = ttk.Frame(candidate_panel, style="Panel.TFrame")
+        selection_row.grid(row=1, column=0, sticky="ew", pady=(4, 8))
         ttk.Label(
-            candidate_panel, textvariable=self.summary, style="Body.TLabel"
-        ).grid(row=1, column=0, sticky="w", pady=(4, 8))
-        columns = ("state", "video", "target", "format")
+            selection_row, textvariable=self.summary, style="Body.TLabel"
+        ).pack(side="left")
+        self.select_all_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            selection_row,
+            text="全选",
+            variable=self.select_all_var,
+            command=self._toggle_select_all,
+        ).pack(side="right")
+        columns = (
+            "state",
+            "video",
+            "target",
+            "duration",
+            "size",
+            "estimate",
+            "format",
+        )
         self.candidate_tree = ttk.Treeview(
-            candidate_panel, columns=columns, show="headings", height=8
+            candidate_panel, columns=columns, show="tree headings", height=8
+        )
+        self.candidate_tree.heading("#0", text="")
+        self.candidate_tree.column(
+            "#0", width=36, minwidth=30, stretch=False, anchor="center"
         )
         self.candidate_tree.heading("state", text="状态")
         self.candidate_tree.heading("video", text="视频")
         self.candidate_tree.heading("target", text="目标 TXT")
+        self.candidate_tree.heading("duration", text="时长")
+        self.candidate_tree.heading("size", text="大小")
+        self.candidate_tree.heading("estimate", text="粗估处理时间")
         self.candidate_tree.heading("format", text="输出格式")
         self.candidate_tree.column("state", width=95, stretch=False)
-        self.candidate_tree.column("video", width=260)
-        self.candidate_tree.column("target", width=260)
-        self.candidate_tree.column("format", width=140, stretch=False)
+        self.candidate_tree.column("video", width=200)
+        self.candidate_tree.column("target", width=200)
+        self.candidate_tree.column("duration", width=70, stretch=False)
+        self.candidate_tree.column("size", width=80, stretch=False)
+        self.candidate_tree.column("estimate", width=100, stretch=False)
+        self.candidate_tree.column("format", width=100, stretch=False)
+        self.candidate_tree.tag_configure("excluded", foreground=MUTED)
+        self.candidate_tree.tag_configure("conflict", foreground=ERROR)
+        self.candidate_tree.bind("<Button-1>", self._on_candidate_click)
+        self.candidate_tree.bind("<Button-3>", self._on_candidate_menu)
         scrollbar = ttk.Scrollbar(
             candidate_panel, orient="vertical", command=self.candidate_tree.yview
         )
@@ -1109,37 +1153,72 @@ class CCCoverApp(ttk.Frame):
         except ValueError as exc:
             messagebox.showerror("无法开始", str(exc), parent=self.master)
             return
+        excluded_paths = self._excluded_video_paths()
 
         def worker() -> None:
             chunks: list[str] = []
             scanning = True
+            exclude_file: Path | None = None
             try:
                 report = self._scan_report(root, options)
                 scanning = False
-                candidate_count, excluded_count = scan_confirmation_stats(report)
-                if candidate_count == 0:
+                fresh_candidates = report.get("candidates", [])
+                excluded_set = set(excluded_paths)
+                excluded_matches = [
+                    candidate
+                    for candidate in fresh_candidates
+                    if str(candidate.get("video_path", "")) in excluded_set
+                ]
+                count = len(fresh_candidates) - len(excluded_matches)
+                if excluded_paths:
+                    self.paths.data_root.mkdir(parents=True, exist_ok=True)
+                    descriptor, name = tempfile.mkstemp(
+                        prefix="cc-cover-excluded-",
+                        suffix=".json",
+                        dir=str(self.paths.data_root),
+                    )
+                    os.close(descriptor)
+                    exclude_file = Path(name)
+                    exclude_file.write_text(
+                        json.dumps(excluded_paths, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                # 报告自带排除（同 stem 冲突）+ 本次 GUI 勾选排除，合计为已排除数。
+                excluded_count = (
+                    scan_confirmation_stats(report)[1] + len(excluded_matches)
+                )
+                if count == 0:
                     self.events.put(
                         (
                             "done",
-                            ("无需处理", "所选目录中没有符合条件的空字幕 TXT。", None),
+                            (
+                                "无需处理",
+                                "没有需要处理的候选（所有候选均已排除或没有候选），本次不处理。",
+                                None,
+                            ),
                         )
                     )
                     return
-                if not self._confirm_start(candidate_count, excluded_count):
+                if not self._confirm_start(count, excluded_count):
                     self.events.put(("idle", "已取消开始"))
                     return
                 self.events.put(
                     (
                         "log",
-                        f"扫描发现 {candidate_count} 个待补全字幕，"
-                        f"已排除 {excluded_count} 个，开始双模型处理。\n",
+                        f"扫描发现 {len(fresh_candidates)} 个候选，"
+                        f"已排除 {excluded_count} 个，本次处理 {count} 个。\n",
                     )
                 )
-                self.events.put(("progress_start", candidate_count))
+                self.events.put(("progress_start", count))
                 self.events.put(("status", "正在生成并替换字幕…"))
                 chunks.append(
                     self._run_streaming(
-                        transcribe_command(self.paths, root, options)
+                        transcribe_command(
+                            self.paths,
+                            root,
+                            options,
+                            exclude_file=exclude_file,
+                        )
                     )
                 )
                 run_dir = run_dir_from_output(chunks[-1])
@@ -1148,7 +1227,7 @@ class CCCoverApp(ttk.Frame):
                         "done",
                         (
                             "字幕补全完成",
-                            f"已完成 {candidate_count} 个字幕文件的生成、替换和复核。",
+                            f"已完成 {count} 个字幕文件的生成、替换和复核。",
                             run_dir,
                         ),
                     )
@@ -1177,6 +1256,12 @@ class CCCoverApp(ttk.Frame):
                         ),
                     )
                 )
+            finally:
+                if exclude_file is not None:
+                    try:
+                        exclude_file.unlink()
+                    except OSError:
+                        pass
 
         self._start_worker(worker, "正在扫描并准备处理…", log_tab=True)
 
@@ -1463,23 +1548,40 @@ class CCCoverApp(ttk.Frame):
 
     def _display_report(self, report: dict[str, Any]) -> None:
         self.last_report = report
+        self.checked_paths.clear()
+        self.candidate_row_video.clear()
+        self.original_state_by_row.clear()
+        self.conflict_row_ids.clear()
         for item in self.candidate_tree.get_children():
             self.candidate_tree.delete(item)
         candidates = report.get("candidates", [])
         for candidate in candidates:
-            self.candidate_tree.insert(
+            video_path = str(candidate.get("video_path", ""))
+            duration = candidate.get("video_duration_s")
+            size = candidate.get("video_size")
+            estimate = estimate_processing_seconds(duration, size)
+            row_id = self.candidate_tree.insert(
                 "",
                 "end",
                 values=(
                     candidate.get("state", ""),
-                    candidate.get("video_path", ""),
+                    video_path,
                     candidate.get("target_path", ""),
+                    format_column_duration(duration),
+                    format_column_size(size),
+                    format_estimate(estimate),
                     "MM:SS / H:MM:SS",
                 ),
             )
+            self.candidate_row_video[row_id] = video_path
+            self.original_state_by_row[row_id] = str(
+                candidate.get("state", "")
+            )
+            self.checked_paths.add(video_path)
+            self._set_checkbox(row_id, True)
         for conflict in report.get("conflicts", []):
             for video in conflict.get("videos", []):
-                self.candidate_tree.insert(
+                row_id = self.candidate_tree.insert(
                     "",
                     "end",
                     values=(
@@ -1487,16 +1589,130 @@ class CCCoverApp(ttk.Frame):
                         video,
                         conflict.get("target_path", ""),
                         "—",
+                        "—",
+                        "—",
+                        "—",
                     ),
+                    tags=("conflict",),
                 )
-        self.summary.set(
-            "视频 {video} 个 · 待补全 {candidate} 个 · 冲突 {conflict} 个 · 受保护非空 TXT {protected} 个".format(
-                video=report.get("video_count", 0),
-                candidate=report.get("candidate_count", 0),
-                conflict=report.get("conflict_count", 0),
-                protected=report.get("protected_nonempty_txt_count", 0),
+                self.conflict_row_ids.add(row_id)
+        self._sync_select_all()
+        self._refresh_summary()
+
+    def _set_checkbox(self, row_id: str, checked: bool) -> None:
+        self.candidate_tree.item(row_id, text="☑" if checked else "☐")
+
+    def _set_row_state(self, row_id: str, state: str, tags: tuple[str, ...]) -> None:
+        values = list(self.candidate_tree.item(row_id, "values"))
+        values[0] = state
+        self.candidate_tree.item(row_id, values=tuple(values), tags=tags)
+
+    def _toggle_candidate(self, row_id: str) -> None:
+        video = self.candidate_row_video.get(row_id)
+        if video is None:
+            return
+        self._apply_checked(row_id, video not in self.checked_paths)
+        self._sync_select_all()
+        self._refresh_summary()
+
+    def _toggle_select_all(self) -> None:
+        select_all = bool(self.select_all_var.get())
+        for row_id in list(self.candidate_row_video):
+            self._apply_checked(row_id, select_all)
+        self._refresh_summary()
+
+    def _apply_checked(self, row_id: str, checked: bool) -> None:
+        video = self.candidate_row_video[row_id]
+        self._set_checkbox(row_id, checked)
+        if checked:
+            self.checked_paths.add(video)
+            self._set_row_state(
+                row_id,
+                self.original_state_by_row.get(row_id, ""),
+                (),
+            )
+        else:
+            self.checked_paths.discard(video)
+            self._set_row_state(row_id, "已排除", ("excluded",))
+
+    def _sync_select_all(self) -> None:
+        self.select_all_var.set(
+            all(
+                video in self.checked_paths
+                for video in self.candidate_row_video.values()
             )
         )
+
+    def _refresh_summary(self) -> None:
+        report = self.last_report or {}
+        self.summary.set(
+            selection_summary(
+                video_count=int(report.get("video_count", 0)),
+                candidate_count=int(report.get("candidate_count", 0)),
+                selected_count=len(self.checked_paths),
+                conflict_count=int(report.get("conflict_count", 0)),
+                protected_count=int(
+                    report.get("protected_nonempty_txt_count", 0)
+                ),
+            )
+        )
+
+    def _excluded_video_paths(self) -> list[str]:
+        return sorted(
+            video
+            for row_id, video in self.candidate_row_video.items()
+            if video not in self.checked_paths
+        )
+
+    def _on_candidate_click(self, event: Any) -> None:
+        row_id = self.candidate_tree.identify_row(event.y)
+        if not row_id or row_id in self.conflict_row_ids:
+            return
+        if self.candidate_tree.identify_column(event.x) != "#0":
+            return
+        self._toggle_candidate(row_id)
+
+    def _on_candidate_menu(self, event: Any) -> None:
+        row_id = self.candidate_tree.identify_row(event.y)
+        if not row_id:
+            return
+        self.candidate_tree.selection_set(row_id)
+        self.candidate_tree.focus(row_id)
+        values = self.candidate_tree.item(row_id, "values")
+        video = str(values[1]) if len(values) > 1 else ""
+        target = str(values[2]) if len(values) > 2 else ""
+        menu = tk.Menu(self.master, tearoff=0)
+        if row_id in self.candidate_row_video:
+            excluded = self.candidate_row_video[row_id] not in self.checked_paths
+            menu.add_command(
+                label="恢复" if excluded else "从本次处理中排除",
+                command=lambda: self._toggle_candidate(row_id),
+            )
+            menu.add_separator()
+        menu.add_command(
+            label="打开视频所在位置",
+            command=lambda: self._open_in_explorer(video),
+        )
+        menu.add_command(
+            label="打开目标 TXT 所在位置",
+            command=lambda: self._open_in_explorer(target),
+        )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _open_in_explorer(self, path_value: str) -> None:
+        if not path_value:
+            return
+        path = Path(path_value)
+        try:
+            subprocess.Popen(
+                ["explorer", "/select,", str(path)],
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except OSError:
+            os.startfile(str(path.parent))
 
     def _enrich_failure(self, info: FailureInfo) -> FailureInfo:
         if info.run_dir is None:

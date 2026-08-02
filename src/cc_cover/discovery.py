@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from cc_cover.engines import probe_duration
 from cc_cover.formats import text_is_whitespace_only
 from cc_cover.models import Candidate, Fingerprint, ProtectedText
 
@@ -121,6 +122,8 @@ def normalize_roots(roots: Iterable[Path]) -> list[Path]:
 def discover(
     roots: Iterable[Path],
     hash_videos: bool = True,
+    probe_durations: bool = False,
+    ffmpeg: Path | None = None,
 ) -> DiscoveryReport:
     normalized_roots = normalize_roots(roots)
     seen_videos: set[Path] = set()
@@ -182,6 +185,11 @@ def discover(
                 initial_state=state,
                 video_fingerprint=fingerprint(video, include_hash=hash_videos),
                 target_fingerprint=fingerprint(target, include_hash=True),
+                video_duration_s=(
+                    probe_duration(video, ffmpeg=ffmpeg)
+                    if probe_durations
+                    else None
+                ),
             )
         )
 

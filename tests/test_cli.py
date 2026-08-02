@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+import wave
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
-from cc_cover.cli import create_parser, main
+from cc_cover.cli import ConfigError, create_parser, load_exclusions, main
 
 
 class CliTests(unittest.TestCase):
@@ -24,6 +26,27 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(payload["candidate_count"], 1)
         self.assertEqual(payload["candidates"][0]["state"], "zero_byte")
+
+    def test_scan_json_includes_duration_and_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            media = root / "lesson.mp4"
+            with wave.open(str(media), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                handle.writeframes(b"\x00\x00" * 16000)
+            expected_size = media.stat().st_size
+            (root / "lesson.txt").write_bytes(b"")
+            output = StringIO()
+            with redirect_stdout(output):
+                result = main(["scan", str(root), "--json", "--no-hash-videos"])
+
+        payload = json.loads(output.getvalue())
+        candidate = payload["candidates"][0]
+        self.assertEqual(result, 0)
+        self.assertAlmostEqual(candidate["video_duration_s"], 1.0, delta=0.15)
+        self.assertEqual(candidate["video_size"], expected_size)
 
     def test_config_settings_require_explicit_scan_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -98,6 +121,136 @@ class CliTests(unittest.TestCase):
                 ["transcribe", "root", "--device", choice]
             )
             self.assertEqual(arguments.device, choice)
+
+    def test_load_exclusions_accepts_valid_video_path_list(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            excluded_file = root / "excluded.json"
+            first = root / "a.mp4"
+            second = root / "b.mp4"
+            excluded_file.write_text(
+                json.dumps([str(first), str(second)]), encoding="utf-8"
+            )
+
+            excluded = load_exclusions(excluded_file)
+
+        self.assertEqual(
+            excluded,
+            {first.resolve(), second.resolve()},
+        )
+
+    def test_load_exclusions_rejects_invalid_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            missing = root / "missing.json"
+            with self.assertRaises(ConfigError):
+                load_exclusions(missing)
+
+            not_a_list = root / "not-a-list.json"
+            not_a_list.write_text(json.dumps({"video": "a.mp4"}), encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_exclusions(not_a_list)
+
+            not_strings = root / "not-strings.json"
+            not_strings.write_text(json.dumps([1, 2]), encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_exclusions(not_strings)
+
+        self.assertEqual(load_exclusions(None), set())
+
+    def test_transcribe_accepts_exclude_file_argument(self) -> None:
+        parser = create_parser()
+        with tempfile.TemporaryDirectory() as temporary:
+            exclude_file = Path(temporary) / "excluded.json"
+            arguments = parser.parse_args(
+                ["transcribe", temporary, "--exclude", str(exclude_file)]
+            )
+
+        self.assertEqual(arguments.exclude, exclude_file)
+
+    def _write_candidates(self, root: Path, names: list[str]) -> None:
+        for name in names:
+            (root / f"{name}.mp4").write_bytes(f"video-{name}".encode())
+            (root / f"{name}.txt").write_bytes(b"")
+
+    def test_transcribe_filters_excluded_candidates_and_reports_counts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_candidates(root, ["keep", "skip"])
+            exclude_file = root / "excluded.json"
+            exclude_file.write_text(
+                json.dumps([str((root / "skip.mp4").resolve())]), encoding="utf-8"
+            )
+            runs_root = root / "runs"
+            model_cache = root / "models"
+            output = StringIO()
+            pipeline = mock.Mock()
+            pipeline.run_dir = root / "runs" / "run-1"
+            with mock.patch(
+                "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
+            ) as create:
+                with redirect_stdout(output):
+                    result = main(
+                        [
+                            "transcribe",
+                            str(root),
+                            "--no-hash-videos",
+                            "--exclude",
+                            str(exclude_file),
+                            "--runs-root",
+                            str(runs_root),
+                            "--model-cache",
+                            str(model_cache),
+                        ]
+                    )
+
+        text = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertIn("已排除：1 个候选", text)
+        self.assertIn("实际处理：1 个候选", text)
+        create.assert_called_once()
+        filtered_report = create.call_args.args[1]
+        self.assertEqual(len(filtered_report.candidates), 1)
+        self.assertEqual(
+            filtered_report.candidates[0].video_path.name,
+            "keep.mp4",
+        )
+        self.assertEqual(
+            [path.name for path in create.call_args.kwargs["excluded_videos"]],
+            ["skip.mp4"],
+        )
+        pipeline.execute.assert_called_once_with()
+
+    def test_transcribe_with_all_excluded_does_not_start_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_candidates(root, ["only"])
+            exclude_file = root / "excluded.json"
+            exclude_file.write_text(
+                json.dumps([str((root / "only.mp4").resolve())]), encoding="utf-8"
+            )
+            output = StringIO()
+            with mock.patch("cc_cover.cli.SubtitlePipeline.create") as create:
+                with redirect_stdout(output):
+                    result = main(
+                        [
+                            "transcribe",
+                            str(root),
+                            "--no-hash-videos",
+                            "--exclude",
+                            str(exclude_file),
+                            "--runs-root",
+                            str(root / "runs"),
+                            "--model-cache",
+                            str(root / "models"),
+                        ]
+                    )
+
+        self.assertEqual(result, 0)
+        self.assertIn("无需处理", output.getvalue())
+        create.assert_not_called()
 
 
 if __name__ == "__main__":

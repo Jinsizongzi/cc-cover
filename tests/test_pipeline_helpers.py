@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
+from cc_cover.discovery import discover
 from cc_cover.engines import (
     configure_model_cache,
     local_faster_whisper_model,
@@ -15,8 +17,10 @@ from cc_cover.pipeline import (
     PipelineError,
     extract_filename_hotwords,
     load_hotwords,
+    load_json,
     options_from_dict,
     options_to_dict,
+    SubtitlePipeline,
     validate_segments,
     write_bytes_atomic,
 )
@@ -207,6 +211,46 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertIn("start_ms=1000", message)
         self.assertIn("end_ms=1000", message)
         self.assertIn("duration_ms=10000", message)
+
+    def test_create_manifest_records_excluded_videos(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "keep.mp4").write_bytes(b"video-keep")
+            (root / "keep.txt").write_bytes(b"")
+            (root / "skip.mp4").write_bytes(b"video-skip")
+            (root / "skip.txt").write_bytes(b"")
+            report = discover([root], hash_videos=False)
+            options = PipelineOptions(
+                roots=[root],
+                runs_root=root / "runs",
+                model_cache=root / "models",
+                hash_videos=False,
+            )
+            kept = tuple(
+                candidate
+                for candidate in report.candidates
+                if candidate.video_path.name == "keep.mp4"
+            )
+            skipped = [
+                candidate.video_path
+                for candidate in report.candidates
+                if candidate.video_path.name == "skip.mp4"
+            ]
+            filtered = replace(report, candidates=kept)
+
+            pipeline = SubtitlePipeline.create(
+                options,
+                filtered,
+                excluded_videos=skipped,
+            )
+            manifest = load_json(pipeline.run_dir / "manifest.json")
+
+        self.assertEqual(len(manifest["candidates"]), 1)
+        self.assertEqual(
+            manifest["candidates"][0]["video_path"],
+            str(root / "keep.mp4"),
+        )
+        self.assertEqual(manifest["excluded_videos"], [str(root / "skip.mp4")])
 
 
 if __name__ == "__main__":

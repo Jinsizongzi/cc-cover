@@ -5,6 +5,7 @@ import inspect
 import logging
 import math
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -144,6 +145,46 @@ def ffmpeg_version(ffmpeg: Path) -> str:
     if completed.returncode != 0:
         raise EngineError(f"FFmpeg 预检失败：{completed.stderr.strip()}")
     return completed.stdout.splitlines()[0] if completed.stdout else str(ffmpeg)
+
+
+DURATION_PATTERN = re.compile(
+    r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def parse_ffmpeg_duration(output: str) -> float | None:
+    """从 `ffmpeg -i` 的 stderr 中解析 Duration 行，失败返回 None。"""
+    match = DURATION_PATTERN.search(output or "")
+    if match is None:
+        return None
+    hours, minutes, seconds = (float(part) for part in match.groups())
+    return hours * 3600.0 + minutes * 60.0 + seconds
+
+
+def probe_duration(video: Path, ffmpeg: Path | None = None) -> float | None:
+    """尽力读取视频时长；探测失败（文件损坏、无 FFmpeg、超时）返回 None。"""
+    try:
+        executable = ffmpeg if ffmpeg is not None else resolve_ffmpeg(None)
+        completed = subprocess.run(
+            [
+                str(executable),
+                "-nostdin",
+                "-hide_banner",
+                "-i",
+                str(video),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+        return parse_ffmpeg_duration(completed.stderr)
+    except Exception:
+        return None
 
 
 def extract_audio(ffmpeg: Path, video: Path, output_wav: Path) -> float:
