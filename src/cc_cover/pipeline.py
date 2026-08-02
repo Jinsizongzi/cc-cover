@@ -30,7 +30,12 @@ from cc_cover.engines import (
     resolve_device,
     resolve_ffmpeg,
 )
-from cc_cover.formats import normalize_text, render_segments, validate_rendered
+from cc_cover.formats import (
+    FormatError,
+    normalize_text,
+    render_segments,
+    validate_rendered,
+)
 from cc_cover.models import (
     Candidate,
     PipelineOptions,
@@ -79,6 +84,16 @@ DEFAULT_HOTWORDS = (
     "GPU",
     "CUDA",
 )
+
+WARNING_DENSITY_MIN = 100.0
+WARNING_DENSITY_MAX = 600.0
+WARNING_LENGTH_RATIO_MIN = 0.80
+WARNING_LENGTH_RATIO_MAX = 1.40
+WARNING_DUPLICATE_RUN_AT = 3
+WARNING_MEDIAN_CHARS_MIN = 3.0
+WARNING_MEDIAN_CHARS_MAX = 40.0
+WARNING_AVG_LOGPROB_MIN = -1.0
+WARNING_NO_SPEECH_PROB_MAX = 0.6
 
 
 class PipelineError(RuntimeError):
@@ -281,6 +296,25 @@ def longest_duplicate_run(segments: Sequence[Segment]) -> int:
             current = 1
         previous = normalized
     return longest
+
+
+def faster_whisper_confidence(segments: Sequence[Segment]) -> dict[str, Any]:
+    avg_logprob = [
+        float(item.metadata["avg_logprob"])
+        for item in segments
+        if item.metadata.get("avg_logprob") is not None
+    ]
+    no_speech_prob = [
+        float(item.metadata["no_speech_prob"])
+        for item in segments
+        if item.metadata.get("no_speech_prob") is not None
+    ]
+    return {
+        "avg_logprob_mean": statistics.mean(avg_logprob) if avg_logprob else None,
+        "avg_logprob_min": min(avg_logprob) if avg_logprob else None,
+        "no_speech_prob_max": max(no_speech_prob) if no_speech_prob else None,
+        "checked_segments": len(segments),
+    }
 
 
 def validate_segments(
@@ -517,7 +551,21 @@ class SubtitlePipeline:
         faster_segments: Sequence[Segment],
         duration_seconds: float,
     ) -> dict[str, Any]:
-        format_metrics = validate_rendered(caption_payload)
+        try:
+            format_metrics = validate_rendered(caption_payload)
+        except FormatError as exc:
+            format_metrics = {
+                "style": "timed",
+                "segment_count": 0,
+                "median_text_chars": 0,
+                "max_text_chars": 0,
+                "median_gap_seconds": 0,
+                "first_timestamp": "",
+                "last_timestamp": "",
+            }
+            format_error = str(exc)
+        else:
+            format_error = None
         funasr_text = "".join(
             normalize_text(item.text) for item in funasr_segments
         )
@@ -535,20 +583,61 @@ class SubtitlePipeline:
         minimum_segments = max(3, int(minutes * 5))
         errors: list[str] = []
         warnings: list[str] = []
+        if format_error is not None:
+            errors.append(f"格式校验失败：{format_error}")
         if len(funasr_segments) < minimum_segments:
             errors.append(
                 f"FunASR 字幕段数过少：{len(funasr_segments)} < {minimum_segments}"
             )
         if density < 30 or density > 1200:
             errors.append(f"文本密度异常：{density:.1f} chars/min")
+        elif density < WARNING_DENSITY_MIN or density > WARNING_DENSITY_MAX:
+            warnings.append(f"文本密度告警：{density:.1f} chars/min")
         if duplicate_run > 4:
             errors.append(f"连续重复字幕过多：{duplicate_run}")
-        if not math.isfinite(length_ratio) or length_ratio < 0.45 or length_ratio > 2.20:
+        elif duplicate_run > WARNING_DUPLICATE_RUN_AT:
+            warnings.append(f"连续重复字幕告警：{duplicate_run}")
+        if (
+            not math.isfinite(length_ratio)
+            or length_ratio < 0.45
+            or length_ratio > 2.20
+        ):
             errors.append(f"双模型全文长度比异常：{length_ratio:.3f}")
+        elif (
+            length_ratio < WARNING_LENGTH_RATIO_MIN
+            or length_ratio > WARNING_LENGTH_RATIO_MAX
+        ):
+            warnings.append(f"双模型全文长度比告警：{length_ratio:.3f}")
         median_chars = float(format_metrics["median_text_chars"])
-        if median_chars < 3 or median_chars > 40:
+        if (
+            format_error is None
+            and (
+                median_chars < WARNING_MEDIAN_CHARS_MIN
+                or median_chars > WARNING_MEDIAN_CHARS_MAX
+            )
+        ):
             warnings.append(f"中位段长偏离常见范围：{median_chars:g} 字")
+        confidence = faster_whisper_confidence(faster_segments)
+        if (
+            confidence["avg_logprob_min"] is not None
+            and confidence["avg_logprob_min"] < WARNING_AVG_LOGPROB_MIN
+        ):
+            warnings.append(
+                "faster-whisper 置信度告警："
+                f"avg_logprob 最低 {confidence['avg_logprob_min']:.2f}"
+            )
+        if (
+            confidence["no_speech_prob_max"] is not None
+            and confidence["no_speech_prob_max"] > WARNING_NO_SPEECH_PROB_MAX
+        ):
+            warnings.append(
+                "faster-whisper 置信度告警："
+                f"no_speech_prob 最高 {confidence['no_speech_prob_max']:.2f}"
+            )
         alignment = align_for_audit(funasr_segments, faster_segments)
+        high_risk_count = int(alignment["high_risk_count"])
+        if high_risk_count:
+            warnings.append(f"high_risk 冲突审计：{high_risk_count} 段需人工复核")
         return {
             "sample_id": candidate.sample_id,
             "video_path": str(candidate.video_path),
@@ -557,6 +646,8 @@ class SubtitlePipeline:
             "passed": not errors,
             "errors": errors,
             "warnings": warnings,
+            "has_warnings": bool(warnings),
+            "warning_count": len(warnings),
             "output_format": {
                 "style": "timed",
                 "timestamp": "MM:SS / H:MM:SS",
@@ -573,6 +664,8 @@ class SubtitlePipeline:
             "longest_consecutive_duplicate_run": duplicate_run,
             "caption_sha256": hashlib.sha256(caption_payload).hexdigest(),
             "caption_size": len(caption_payload),
+            "faster_whisper_confidence": confidence,
+            "high_risk_count": high_risk_count,
             "alignment_summary": {
                 key: value for key, value in alignment.items() if key != "alignments"
             },
@@ -643,6 +736,15 @@ class SubtitlePipeline:
             "staged_ids": sorted(merged),
             "staged_all": staged_all,
             "all_passed": all_passed,
+            "warning_count": sum(
+                int(item.get("warning_count", 0)) for item in merged.values()
+            ),
+            "warning_sample_ids": sorted(
+                sample_id
+                for sample_id, item in merged.items()
+                if item.get("warnings")
+            ),
+            "has_warnings": any(item.get("warnings") for item in merged.values()),
             "samples": [merged[sample_id] for sample_id in sorted(merged)],
         }
         write_json_atomic(stage_path, stage_report)
