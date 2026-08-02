@@ -67,6 +67,21 @@ class GuiOptions:
     ffmpeg: Path | None = None
 
 
+DEVICE_CHOICES = ("auto", "cuda", "cpu")
+ACCELERATOR_CHOICES = ("cuda", "cpu")
+
+
+@dataclass(frozen=True)
+class GuiSettings:
+    """GUI 用户偏好，持久化到数据根下的 settings.json。"""
+
+    scan_path: str = ""
+    device: str = "auto"
+    accelerator: str = "cuda"
+    ffmpeg: str = ""
+    hash_videos: bool = True
+
+
 RUN_DIR_PATTERN = re.compile(r"^运行目录：\s*(.+?)\s*$", re.MULTILINE)
 ERROR_LINE_PATTERN = re.compile(r"^错误：\s*(.+)$", re.MULTILINE)
 PROGRESS_PATTERN = re.compile(
@@ -335,6 +350,40 @@ def write_settings(data_root: Path, values: Mapping[str, Any]) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def load_gui_settings(data_root: Path) -> GuiSettings:
+    """读取数据根下 settings.json 中的 GUI 偏好；缺失或非法字段回退默认值。"""
+    values = read_settings(data_root)
+    scan_path = values.get("scan_path")
+    device = values.get("device")
+    accelerator = values.get("accelerator")
+    ffmpeg = values.get("ffmpeg")
+    hash_videos = values.get("hash_videos")
+    return GuiSettings(
+        scan_path=str(scan_path) if isinstance(scan_path, str) else "",
+        device=device if device in DEVICE_CHOICES else "auto",
+        accelerator=(
+            accelerator if accelerator in ACCELERATOR_CHOICES else "cuda"
+        ),
+        ffmpeg=str(ffmpeg) if isinstance(ffmpeg, str) else "",
+        hash_videos=hash_videos if isinstance(hash_videos, bool) else True,
+    )
+
+
+def save_gui_settings(data_root: Path, settings: GuiSettings) -> None:
+    """合并写入 GUI 偏好，保留 data_root 等既有设置键。"""
+    values = read_settings(data_root)
+    values.update(
+        {
+            "scan_path": settings.scan_path,
+            "device": settings.device,
+            "accelerator": settings.accelerator,
+            "ffmpeg": settings.ffmpeg,
+            "hash_videos": settings.hash_videos,
+        }
+    )
+    write_settings(data_root, values)
 
 
 def is_writable(directory: Path) -> bool:
