@@ -6,22 +6,30 @@ import queue
 import subprocess
 import threading
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Callable
 
 from cc_cover import __version__
 from cc_cover.gui_support import (
+    FailureInfo,
     GuiOptions,
     RuntimePaths,
     command_environment,
     environment_check_command,
     environment_status_label,
+    error_text,
+    failure_info_from_command,
+    first_failed_sample,
     python_candidates,
     resume_command,
+    run_is_resumable,
     runtime_paths,
     scan_command,
     setup_commands,
+    stopped_message,
+    terminate_process_tree,
     transcribe_command,
 )
 
@@ -36,6 +44,10 @@ PRIMARY_DARK = "#2445b3"
 SUCCESS = "#17803d"
 WARNING = "#b54708"
 ERROR = "#b42318"
+
+
+class TaskCancelled(RuntimeError):
+    """用户主动停止任务时抛出，不当作任务失败处理。"""
 
 
 FEATURE_TEXT = """核心功能
@@ -86,9 +98,10 @@ GUIDE_TEXT = """操作指南
 
 中断恢复
 
-1. 点击“继续中断任务”。
-2. 选择包含 manifest.json 的运行目录。
-3. 软件会复用已完成的模型结果，并在校验通过后继续写回。
+1. 运行期间可随时点击“停止当前任务”（扫描、环境检查、转写、写回均支持）。
+2. 主动停止不会弹出错误框，而是提示“任务已停止，产物已暂存，可点击‘继续中断任务’恢复”。
+3. 失败或停止后可直接点击“继续中断任务”恢复，软件会复用已完成的模型结果，并在校验通过后继续写回。
+4. 也可以点击“打开运行目录”查看运行产物与日志。
 
 选项说明
 
@@ -113,6 +126,7 @@ class CCCoverApp(ttk.Frame):
         self.process: subprocess.Popen[str] | None = None
         self.busy = False
         self.cancel_requested = False
+        self.stop_triggered = False
         self.environment_ready = False
         self.last_report: dict[str, Any] | None = None
 
@@ -465,6 +479,7 @@ class CCCoverApp(ttk.Frame):
         if self.busy:
             return
         self.cancel_requested = False
+        self.stop_triggered = False
         self._set_busy(True, status)
         if log_tab:
             self.notebook.select(self.log_tab)
@@ -474,23 +489,26 @@ class CCCoverApp(ttk.Frame):
         return command_environment(self.paths)
 
     def _run_capture(self, command: list[str]) -> str:
-        completed = subprocess.run(
+        if self.cancel_requested:
+            raise TaskCancelled("任务已由用户停止。")
+        process = subprocess.Popen(
             command,
             cwd=str(self.paths.data_root),
             env=self._process_environment(),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
             creationflags=CREATE_NO_WINDOW,
-            check=False,
         )
-        output = (completed.stdout or "") + (completed.stderr or "")
-        if completed.returncode != 0:
-            raise RuntimeError(output.strip() or f"命令执行失败：{completed.returncode}")
-        return output
+        self.process = process
+        assert process.stdout is not None
+        return self._finish_process(process, "".join(process.stdout))
 
-    def _run_streaming(self, command: list[str]) -> None:
+    def _run_streaming(self, command: list[str]) -> str:
+        if self.cancel_requested:
+            raise TaskCancelled("任务已由用户停止。")
         self.events.put(("log", "\n▶ " + " ".join(command[1:]) + "\n"))
         process = subprocess.Popen(
             command,
@@ -505,14 +523,28 @@ class CCCoverApp(ttk.Frame):
         )
         self.process = process
         assert process.stdout is not None
+        lines: list[str] = []
         for line in process.stdout:
+            lines.append(line)
             self.events.put(("log", line))
+        return self._finish_process(process, "".join(lines))
+
+    def _finish_process(
+        self, process: subprocess.Popen[str], output: str
+    ) -> str:
         return_code = process.wait()
         self.process = None
-        if self.cancel_requested:
-            raise RuntimeError("任务已由用户停止。运行产物可以稍后继续。")
+        if self.stop_triggered:
+            raise TaskCancelled(
+                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
+            )
+        if self.cancel_requested and return_code != 0:
+            raise TaskCancelled(
+                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
+            )
         if return_code != 0:
-            raise RuntimeError(f"任务执行失败，退出代码：{return_code}")
+            raise RuntimeError(output.strip() or f"任务执行失败，退出代码：{return_code}")
+        return output
 
     def _scan_report(self, root: Path, options: GuiOptions) -> dict[str, Any]:
         self.events.put(("status", "正在扫描目录…"))
@@ -554,6 +586,16 @@ class CCCoverApp(ttk.Frame):
                 output = self._run_capture(
                     environment_check_command(self.paths, accelerator)
                 )
+            except TaskCancelled:
+                self.events.put(
+                    (
+                        "cancelled",
+                        failure_info_from_command(
+                            [], exc, fallback_stage="环境检查"
+                        ),
+                    )
+                )
+                return
             except Exception as exc:
                 detail = str(exc).strip() or "需要安装或修复"
                 label = (
@@ -599,6 +641,7 @@ class CCCoverApp(ttk.Frame):
 
     def setup_environment(self) -> None:
         def worker() -> None:
+            chunks: list[str] = []
             try:
                 self.paths.data_root.mkdir(parents=True, exist_ok=True)
                 base_python = self._find_base_python()
@@ -616,10 +659,11 @@ class CCCoverApp(ttk.Frame):
                     self.events.put(
                         ("status", f"正在安装组件 {index}/{len(commands)}…")
                     )
-                    self._run_streaming(command)
+                    chunks.append(self._run_streaming(command))
                 output = self._run_capture(
                     environment_check_command(self.paths, accelerator)
                 )
+                chunks.append(output)
                 self.events.put(("log", output + "\n"))
                 self.events.put(
                     (
@@ -633,8 +677,29 @@ class CCCoverApp(ttk.Frame):
                         ("安装完成", "运行环境安装并检查通过，可以开始扫描视频。"),
                     )
                 )
+            except TaskCancelled:
+                self.events.put(
+                    (
+                        "cancelled",
+                        failure_info_from_command(
+                            chunks, exc, fallback_stage="安装运行环境"
+                        ),
+                    )
+                )
             except Exception as exc:
-                self.events.put(("error", ("环境安装失败", str(exc))))
+                self.events.put(
+                    (
+                        "error",
+                        (
+                            "环境安装失败",
+                            failure_info_from_command(
+                                chunks,
+                                exc,
+                                fallback_stage="安装运行环境",
+                            ),
+                        ),
+                    )
+                )
 
         self._start_worker(worker, "正在准备运行环境…", log_tab=True)
 
@@ -652,8 +717,27 @@ class CCCoverApp(ttk.Frame):
             try:
                 self._scan_report(root, options)
                 self.events.put(("idle", "扫描完成"))
+            except TaskCancelled:
+                self.events.put(
+                    (
+                        "cancelled",
+                        failure_info_from_command(
+                            [], exc, fallback_stage="扫描"
+                        ),
+                    )
+                )
             except Exception as exc:
-                self.events.put(("error", ("扫描失败", str(exc))))
+                self.events.put(
+                    (
+                        "error",
+                        (
+                            "扫描失败",
+                            failure_info_from_command(
+                                [], exc, fallback_stage="扫描"
+                            ),
+                        ),
+                    )
+                )
 
         self._start_worker(worker, "正在扫描目录…")
 
@@ -668,8 +752,11 @@ class CCCoverApp(ttk.Frame):
             return
 
         def worker() -> None:
+            chunks: list[str] = []
+            scanning = True
             try:
                 report = self._scan_report(root, options)
+                scanning = False
                 count = int(report.get("candidate_count", 0))
                 if count == 0:
                     self.events.put(
@@ -683,7 +770,11 @@ class CCCoverApp(ttk.Frame):
                     ("log", f"扫描发现 {count} 个待补全字幕，开始双模型处理。\n")
                 )
                 self.events.put(("status", "正在生成并替换字幕…"))
-                self._run_streaming(transcribe_command(self.paths, root, options))
+                chunks.append(
+                    self._run_streaming(
+                        transcribe_command(self.paths, root, options)
+                    )
+                )
                 self.events.put(
                     (
                         "done",
@@ -693,8 +784,35 @@ class CCCoverApp(ttk.Frame):
                         ),
                     )
                 )
+            except TaskCancelled:
+                self.events.put(
+                    (
+                        "cancelled",
+                        failure_info_from_command(
+                            chunks,
+                            exc,
+                            fallback_stage=(
+                                "扫描" if scanning else "转写与写回"
+                            ),
+                        ),
+                    )
+                )
             except Exception as exc:
-                self.events.put(("error", ("字幕补全失败", str(exc))))
+                self.events.put(
+                    (
+                        "error",
+                        (
+                            "字幕补全失败",
+                            failure_info_from_command(
+                                chunks,
+                                exc,
+                                fallback_stage=(
+                                    "扫描" if scanning else "转写与写回"
+                                ),
+                            ),
+                        ),
+                    )
+                )
 
         self._start_worker(worker, "正在扫描并准备处理…", log_tab=True)
 
@@ -718,19 +836,52 @@ class CCCoverApp(ttk.Frame):
                 parent=self.master,
             )
             return
+        self._resume_run_dir(run_dir)
+
+    def _resume_run_dir(self, run_dir: Path) -> None:
+        if self.busy:
+            return
 
         def worker() -> None:
+            chunks: list[str] = []
             try:
                 self.events.put(("status", "正在继续中断任务…"))
-                self._run_streaming(resume_command(self.paths, run_dir))
+                chunks.append(
+                    self._run_streaming(resume_command(self.paths, run_dir))
+                )
                 self.events.put(
                     (
                         "done",
                         ("任务已完成", "中断任务已继续执行并完成最终复核。"),
                     )
                 )
+            except TaskCancelled:
+                self.events.put(
+                    (
+                        "cancelled",
+                        failure_info_from_command(
+                            chunks,
+                            exc,
+                            fallback_stage="继续中断任务",
+                            run_dir=run_dir,
+                        ),
+                    )
+                )
             except Exception as exc:
-                self.events.put(("error", ("继续任务失败", str(exc))))
+                self.events.put(
+                    (
+                        "error",
+                        (
+                            "继续任务失败",
+                            failure_info_from_command(
+                                chunks,
+                                exc,
+                                fallback_stage="继续中断任务",
+                                run_dir=run_dir,
+                            ),
+                        ),
+                    )
+                )
 
         self._start_worker(worker, "正在继续中断任务…", log_tab=True)
 
@@ -740,13 +891,13 @@ class CCCoverApp(ttk.Frame):
         self.cancel_requested = True
         process = self.process
         if process is not None and process.poll() is None:
-            process.terminate()
+            self.stop_triggered = True
+            terminate_process_tree(process)
         self.status.set("正在停止任务…")
         self._append_log("\n用户请求停止当前任务。\n")
 
     def open_runs_directory(self) -> None:
-        self.paths.runs_root.mkdir(parents=True, exist_ok=True)
-        os.startfile(self.paths.runs_root)
+        self._open_directory(self.paths.runs_root)
 
     def clear_log(self) -> None:
         self.log_text.configure(state="normal")
@@ -796,6 +947,176 @@ class CCCoverApp(ttk.Frame):
             )
         )
 
+    def _enrich_failure(self, info: FailureInfo) -> FailureInfo:
+        if info.run_dir is None:
+            return info
+        if info.file and info.stage != "质量门禁":
+            return info
+        sample = first_failed_sample(info.run_dir)
+        if sample is None:
+            return info
+        video, reason = sample
+        return replace(
+            info,
+            file=info.file or video,
+            reason=reason if info.stage == "质量门禁" else info.reason,
+        )
+
+    def _result_dialog(self, title: str) -> tk.Toplevel:
+        dialog = tk.Toplevel(self.master)
+        dialog.title(title)
+        dialog.configure(background=PANEL)
+        dialog.resizable(False, False)
+        dialog.transient(self.master)
+        dialog.grab_set()
+        dialog.update_idletasks()
+        x = self.master.winfo_rootx() + max(
+            0, (self.master.winfo_width() - dialog.winfo_reqwidth()) // 2
+        )
+        y = self.master.winfo_rooty() + max(
+            0, (self.master.winfo_height() - dialog.winfo_reqheight()) // 3
+        )
+        dialog.geometry(f"+{x}+{y}")
+        return dialog
+
+    def _dialog_row(
+        self, parent: ttk.Frame, row: int, label: str, value: str
+    ) -> None:
+        ttk.Label(parent, text=label, style="Body.TLabel").grid(
+            row=row, column=0, sticky="nw", pady=(4, 0)
+        )
+        ttk.Label(
+            parent,
+            text=value,
+            style="Body.TLabel",
+            wraplength=500,
+            justify="left",
+        ).grid(row=row, column=1, sticky="nw", pady=(4, 0), padx=(10, 0))
+
+    def _copy_error(
+        self, dialog: tk.Toplevel, title: str, info: FailureInfo
+    ) -> None:
+        self.master.clipboard_clear()
+        self.master.clipboard_append(error_text(title, info))
+        dialog.destroy()
+
+    def _view_log(self, dialog: tk.Toplevel) -> None:
+        self.notebook.select(self.log_tab)
+        dialog.destroy()
+
+    def _open_run_dir(self, dialog: tk.Toplevel, info: FailureInfo) -> None:
+        target = info.run_dir if info.run_dir is not None else self.paths.runs_root
+        self._open_directory(target)
+        dialog.destroy()
+
+    def _resume_from_dialog(
+        self, dialog: tk.Toplevel, info: FailureInfo
+    ) -> None:
+        run_dir = info.run_dir
+        dialog.destroy()
+        if run_dir is not None and run_is_resumable(run_dir):
+            self._resume_run_dir(run_dir)
+
+    def _open_directory(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(path))
+
+    def _show_failure_dialog(self, title: str, info: FailureInfo) -> None:
+        dialog = self._result_dialog(title)
+        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
+        body.pack(fill="x")
+        body.columnconfigure(1, weight=1)
+        row = 0
+        for label, value in (
+            ("文件：", info.file),
+            ("阶段：", info.stage),
+            ("原因：", info.reason),
+        ):
+            if not value:
+                continue
+            self._dialog_row(body, row, label, value)
+            row += 1
+        if info.run_dir is not None:
+            self._dialog_row(body, row, "运行目录：", str(info.run_dir))
+            row += 1
+        if info.done_count is not None and info.total_count is not None:
+            note = (
+                f"已处理 {info.done_count}/{info.total_count} 个视频，"
+                "全部产物已暂存，可点击「继续中断任务」恢复，已完成的文件不会重跑。"
+            )
+            ttk.Label(
+                body, text=note, style="Body.TLabel", wraplength=500
+            ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
+        actions.pack(fill="x")
+        ttk.Button(
+            actions,
+            text="复制错误信息",
+            style="Action.TButton",
+            command=lambda: self._copy_error(dialog, title, info),
+        ).pack(side="left")
+        ttk.Button(
+            actions,
+            text="查看日志",
+            style="Action.TButton",
+            command=lambda: self._view_log(dialog),
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            actions,
+            text="打开运行目录",
+            style="Action.TButton",
+            command=lambda: self._open_run_dir(dialog, info),
+        ).pack(side="left", padx=(8, 0))
+        if run_is_resumable(info.run_dir):
+            ttk.Button(
+                actions,
+                text="继续中断任务",
+                style="Action.TButton",
+                command=lambda: self._resume_from_dialog(dialog, info),
+            ).pack(side="right")
+        ttk.Button(
+            actions,
+            text="关闭",
+            style="Action.TButton",
+            command=dialog.destroy,
+        ).pack(side="right", padx=(0, 8))
+
+    def _show_stopped_dialog(self, info: FailureInfo) -> None:
+        dialog = self._result_dialog("任务已停止")
+        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
+        body.pack(fill="x")
+        body.columnconfigure(1, weight=1)
+        resumable = run_is_resumable(info.run_dir)
+        ttk.Label(
+            body,
+            text=stopped_message(info),
+            style="Body.TLabel",
+            wraplength=500,
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        if info.run_dir is not None:
+            self._dialog_row(body, 1, "运行目录：", str(info.run_dir))
+        actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
+        actions.pack(fill="x")
+        if resumable:
+            ttk.Button(
+                actions,
+                text="继续中断任务",
+                style="Action.TButton",
+                command=lambda: self._resume_from_dialog(dialog, info),
+            ).pack(side="left")
+        ttk.Button(
+            actions,
+            text="打开运行目录",
+            style="Action.TButton",
+            command=lambda: self._open_run_dir(dialog, info),
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            actions,
+            text="关闭",
+            style="Action.TButton",
+            command=dialog.destroy,
+        ).pack(side="right")
+
     def _poll_events(self) -> None:
         try:
             while True:
@@ -816,11 +1137,16 @@ class CCCoverApp(ttk.Frame):
                     title, message = payload
                     self._set_busy(False, "就绪")
                     messagebox.showinfo(title, message, parent=self.master)
+                elif event == "cancelled":
+                    info = payload
+                    self._set_busy(False, "任务已停止")
+                    self._append_log(stopped_message(info) + "\n")
+                    self._show_stopped_dialog(info)
                 elif event == "error":
-                    title, message = payload
+                    title, info = payload
                     self._set_busy(False, "发生错误")
-                    self._append_log(f"\n错误：{message}\n")
-                    messagebox.showerror(title, message, parent=self.master)
+                    self._append_log(f"\n错误：{info.reason}\n")
+                    self._show_failure_dialog(title, self._enrich_failure(info))
         except queue.Empty:
             pass
         self.after(100, self._poll_events)

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
 APP_DATA_DIRECTORY = "CC-Cover"
@@ -19,6 +22,18 @@ ASR_DEPENDENCIES = (
     "numpy>=1.26,<2",
     "soundfile>=0.12,<1",
 )
+
+
+@dataclass(frozen=True)
+class FailureInfo:
+    """任务失败/停止时用于对话框的结构化信息。"""
+
+    stage: str
+    reason: str
+    file: str | None = None
+    run_dir: Path | None = None
+    done_count: int | None = None
+    total_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +51,181 @@ class GuiOptions:
     device: str = "auto"
     hash_videos: bool = True
     ffmpeg: Path | None = None
+
+
+RUN_DIR_PATTERN = re.compile(r"^运行目录：\s*(.+?)\s*$", re.MULTILINE)
+ERROR_LINE_PATTERN = re.compile(r"^错误：\s*(.+)$", re.MULTILINE)
+PROGRESS_PATTERN = re.compile(
+    r"^\[[A-Za-z_\-]+\s+(\d+)/(\d+)\]\s*(.*)$", re.MULTILINE
+)
+VIDEO_PATH_PATTERN = re.compile(
+    r"((?:[A-Za-z]:[\\/]|[\\/])[^\s,，）)\]]+\.(?:mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mts|ogv|mpg|mpeg|3gp|rmvb|rm|vob|asf|f4v|divx))",
+    re.IGNORECASE,
+)
+ENGINE_VIDEO_PATTERN = re.compile(r"video=([^,\s]+)")
+
+
+def detect_stage(reason: str, fallback: str) -> str:
+    if not reason:
+        return fallback
+    if "质量门禁" in reason:
+        return "质量门禁"
+    if "音频提取失败" in reason:
+        return "音频提取"
+    if "engine=funasr" in reason or "FunASR" in reason:
+        return "FunASR 转写"
+    if "engine=faster-whisper" in reason or "faster-whisper" in reason:
+        return "faster-whisper 转写"
+    if any(token in reason for token in ("写回", "替换", "备份", "回滚", "复核")):
+        return "写回"
+    if "扫描" in reason:
+        return "扫描"
+    return fallback
+
+
+def extract_file(output: str, reason: str) -> str | None:
+    progress_file: str | None = None
+    for match in PROGRESS_PATTERN.finditer(output):
+        file_path = match.group(3).strip()
+        if file_path:
+            progress_file = file_path
+    if progress_file:
+        return progress_file
+    match = ENGINE_VIDEO_PATTERN.search(reason)
+    if match:
+        return match.group(1).strip()
+    match = VIDEO_PATH_PATTERN.search(reason)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def failure_info(
+    output: str,
+    *,
+    fallback_stage: str,
+    reason: str | None = None,
+    run_dir: Path | None = None,
+) -> FailureInfo:
+    """从子进程输出解析失败对话框需要的信息。"""
+    text = output or ""
+    if reason is None:
+        error_lines = ERROR_LINE_PATTERN.findall(text)
+        reason = error_lines[-1].strip() if error_lines else text.strip()
+        if len(reason) > 1200:
+            reason = reason[-1200:]
+    run_dir_match = RUN_DIR_PATTERN.search(text)
+    resolved_run_dir = (
+        run_dir
+        if run_dir is not None
+        else (Path(run_dir_match.group(1)) if run_dir_match else None)
+    )
+    progress_matches = list(PROGRESS_PATTERN.finditer(text))
+    done_count = total_count = None
+    if progress_matches:
+        last = progress_matches[-1]
+        done_count = int(last.group(1))
+        total_count = int(last.group(2))
+    return FailureInfo(
+        stage=detect_stage(reason, fallback_stage),
+        reason=reason,
+        file=extract_file(text, reason),
+        run_dir=resolved_run_dir,
+        done_count=done_count,
+        total_count=total_count,
+    )
+
+
+def failure_info_from_command(
+    chunks: Sequence[str],
+    exc: BaseException,
+    *,
+    fallback_stage: str,
+    run_dir: Path | None = None,
+) -> FailureInfo:
+    """从已收集输出与命令异常构建失败对话框信息。"""
+    output = "".join(chunks)
+    message = str(exc).strip()
+    if message:
+        output = output.rstrip("\n") + "\n" + message
+    return failure_info(output, fallback_stage=fallback_stage, run_dir=run_dir)
+
+
+def first_failed_sample(run_dir: Path | None) -> tuple[str, str] | None:
+    """质量门禁失败时，从运行目录读取第一个未通过的样例。"""
+    if run_dir is None:
+        return None
+    report = run_dir / "stage_report.json"
+    if not report.is_file():
+        return None
+    try:
+        payload = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for sample in payload.get("samples", []):
+        if not isinstance(sample, dict) or bool(sample.get("passed", True)):
+            continue
+        video = str(sample.get("video_path") or "")
+        errors = [str(item) for item in sample.get("errors", [])]
+        reason = "；".join(errors) if errors else "质量门禁未通过"
+        return video, reason
+    return None
+
+
+def run_is_resumable(run_dir: Path | None) -> bool:
+    if run_dir is None:
+        return False
+    manifest = run_dir / "manifest.json"
+    if not manifest.is_file():
+        return False
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and str(payload.get("status")) != "committed"
+
+
+def stopped_message(info: FailureInfo) -> str:
+    """用户主动停止任务时，日志与提示框共用的文案。"""
+    if run_is_resumable(info.run_dir):
+        return "任务已停止，产物已暂存，可点击「继续中断任务」恢复。"
+    if info.stage == "扫描":
+        return "扫描已停止，未展示扫描结果，可重新扫描。"
+    return "任务已停止，未产生可恢复的运行产物。"
+
+
+def error_text(title: str, info: FailureInfo) -> str:
+    lines = [title]
+    if info.file:
+        lines.append(f"文件：{info.file}")
+    lines.append(f"阶段：{info.stage}")
+    lines.append(f"原因：{info.reason}")
+    if info.run_dir is not None:
+        lines.append(f"运行目录：{info.run_dir}")
+    if info.done_count is not None and info.total_count is not None:
+        lines.append(
+            f"已处理 {info.done_count}/{info.total_count} 个视频，产物已暂存。"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
+    """立即终止进程及其子进程树（Windows 用 taskkill，其他平台退化为 terminate）。"""
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+            )
+            return
+        except OSError:
+            pass
+    process.terminate()
 
 
 def runtime_paths(
