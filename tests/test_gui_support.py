@@ -687,6 +687,32 @@ class SingleInstanceLockTests(unittest.TestCase):
                 self.assertFalse(SingleInstanceLock(root).acquire())
             self.assertTrue(SingleInstanceLock(root).acquire())
 
+    def test_second_process_is_rejected_until_first_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            child_code = (
+                "import sys, time\n"
+                "from pathlib import Path\n"
+                "from cc_cover.gui_support import SingleInstanceLock\n"
+                "lock = SingleInstanceLock(Path(sys.argv[1]))\n"
+                "print(lock.acquire(), flush=True)\n"
+                "time.sleep(10)\n"
+            )
+            child = subprocess.Popen(
+                [sys.executable, "-c", child_code, str(root)],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                first_line = child.stdout.readline()
+                self.assertEqual(first_line.strip(), "True")
+                self.assertFalse(SingleInstanceLock(root).acquire())
+            finally:
+                child.terminate()
+                child.wait(timeout=10)
+                child.stdout.close()
+            self.assertTrue(SingleInstanceLock(root).acquire())
+
     def test_focus_existing_window_never_raises(self) -> None:
         self.assertIsInstance(focus_existing_window(), bool)
         self.assertIsInstance(focus_existing_window(""), bool)
