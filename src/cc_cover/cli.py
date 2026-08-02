@@ -130,7 +130,6 @@ def report_payload(report: DiscoveryReport) -> dict[str, Any]:
         "video_count": report.video_count,
         "matched_text_count": report.matched_text_count,
         "missing_text_count": report.missing_text_count,
-        "nonempty_format_samples": report.nonempty_format_samples,
         "candidate_count": len(report.candidates),
         "protected_nonempty_txt_count": len(report.protected_texts),
         "candidates": [
@@ -139,7 +138,6 @@ def report_payload(report: DiscoveryReport) -> dict[str, Any]:
                 "state": item.initial_state,
                 "video_path": str(item.video_path),
                 "target_path": str(item.target_path),
-                "format": item.profile.to_dict(),
             }
             for item in report.candidates
         ],
@@ -150,7 +148,6 @@ def print_report(report: DiscoveryReport) -> None:
     print(f"视频文件：{report.video_count}")
     print(f"同名 TXT：{report.matched_text_count}")
     print(f"缺失 TXT：{report.missing_text_count}")
-    print(f"可用格式样本：{report.nonempty_format_samples}")
     print(f"待补全字幕：{len(report.candidates)}")
     print(f"受保护非空 TXT：{len(report.protected_texts)}")
     for candidate in report.candidates:
