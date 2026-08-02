@@ -10,6 +10,11 @@ permissions:
 jobs:
   unit:
     runs-on: ${{ matrix.os }}
+    # Windows runner 的控制台默认 cp1252；与 gui_support 对子进程的约定一致，
+    # 保证 pipeline 的中文进度输出（print 加载引擎等）不触发 UnicodeEncodeError。
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
