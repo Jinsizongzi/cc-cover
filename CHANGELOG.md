@@ -36,7 +36,7 @@
 ### 工程
 
 - CI/测试增强：`tests.yml` 增加 Windows runner 与 ubuntu 并行；补齐写回/回滚安全、新格式校验、目标冲突、新扫描语义、哈希策略、faster-whisper 段换算与 GUI 冒烟测试；Windows runner 以 `PYTHONUTF8`/`PYTHONIOENCODING` 保证中文输出（#34）。
-- 发布形态：PyInstaller 由 onefile 改为 onedir（`--noupx`、写入版本信息与图标，`assets/app.ico`、`packaging/version_info.txt`）；新增 Inno Setup 安装器（`packaging/CC-Cover.iss`，默认当前用户安装到 `%LOCALAPPDATA%\Programs\CC-Cover`、可自选目录、卸载时清理数据根）与绿色便携压缩包（解压即用，数据根=exe 目录）；GitHub Actions 在 tag 时构建并发布安装器与便携包两种发布物（#36）。
+- 发布形态：PyInstaller 由 onefile 改为 onedir（`--noupx`、写入版本信息与图标，`assets/app.ico`、`packaging/version_info.txt`），并排除 ASR 运行时栈（torch/funasr 等由数据根 venv 首跑安装，冻结包不含，避免数 GB 膨胀）；新增 Inno Setup 安装器（`packaging/CC-Cover.iss`，默认当前用户安装到 `%LOCALAPPDATA%\Programs\CC-Cover`、可自选目录、卸载时清理数据根）与绿色便携压缩包（解压即用，数据根=exe 目录）；GitHub Actions 在 tag 时构建并发布安装器与便携包两种发布物，并对两者做运行时冒烟（静默安装/卸载、便携 exe 启动存活）后才发布（#36）。
 
 ## [0.3.1] - 2026-07-22
 

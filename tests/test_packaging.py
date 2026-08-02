@@ -6,6 +6,8 @@ import struct
 import unittest
 from pathlib import Path
 
+from cc_cover import gui_support
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -18,15 +20,6 @@ def _load_build_version_info():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def _app_version() -> str:
-    init = (PROJECT_ROOT / "src" / "cc_cover" / "__init__.py").read_text(
-        encoding="utf-8"
-    )
-    match = re.search(r'__version__\s*=\s*"([^"]+)"', init)
-    assert match is not None, "__version__ 未在 __init__.py 中定义"
-    return match.group(1)
 
 
 class PackagingTests(unittest.TestCase):
@@ -42,7 +35,7 @@ class PackagingTests(unittest.TestCase):
     def test_version_resource_has_four_part_file_version(self) -> None:
         """FixedFileInfo 的 filevers/prodvers 必须是四段整数元组。"""
         module = _load_build_version_info()
-        fixed = module.parse_version(_app_version())
+        fixed = module.parse_version(module.current_version())
         self.assertEqual(len(fixed), 4)
         for part in fixed:
             self.assertIsInstance(part, int)
@@ -56,7 +49,7 @@ class PackagingTests(unittest.TestCase):
         match = re.search(r'#define MyAppVersion "([^"]+)"', iss)
         self.assertIsNotNone(match, "CC-Cover.iss 缺少默认 MyAppVersion")
         assert match is not None
-        self.assertEqual(match.group(1), _app_version())
+        self.assertEqual(match.group(1), _load_build_version_info().current_version())
 
     def test_iss_installs_per_user_to_localappdata(self) -> None:
         """安装器默认当前用户安装到 %LOCALAPPDATA%\\Programs\\CC-Cover。"""
@@ -70,13 +63,16 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn("PrivilegesRequired=admin", iss)
 
     def test_iss_packages_onedir_and_cleans_data_root_on_uninstall(self) -> None:
-        """安装器打包 onedir 产物；卸载时清理数据根下的本地数据。"""
+        """安装器打包 onedir 产物；卸载时清理数据根（与运行时布局单一来源一致）。"""
         iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(
             encoding="utf-8"
         )
         self.assertIn("Source: \"..\\dist\\CC-Cover\\*\"", iss)
         self.assertIn("recursesubdirs", iss)
-        for name in ("venv", "model-cache", "runs", "temp", "settings.json"):
+        data_root_items = set(gui_support.DATA_ROOT_SUBDIRECTORIES) | {
+            gui_support.SETTINGS_FILENAME
+        }
+        for name in sorted(data_root_items):
             with self.subTest(name=name):
                 self.assertIn(f'Name: "{{app}}\\{name}"', iss)
 

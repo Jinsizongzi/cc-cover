@@ -16,6 +16,9 @@ from typing import Any, Mapping, Sequence
 
 APP_DATA_DIRECTORY = "CC-Cover"
 SETTINGS_FILENAME = "settings.json"
+# 数据根固定子目录：与 README/安装器卸载清单保持一致，改动需同步
+# packaging/CC-Cover.iss 的 [UninstallDelete] 与 tests/test_packaging.py。
+DATA_ROOT_SUBDIRECTORIES = ("venv", "model-cache", "runs", "temp")
 DATA_ROOT_KEY = "data_root"
 TORCH_VERSION = "2.5.1"
 ASR_DEPENDENCIES = (
@@ -805,14 +808,9 @@ def runtime_paths(
 
 def ensure_data_root(paths: RuntimePaths) -> None:
     """创建数据根与固定子目录：venv、model-cache、runs、temp。"""
-    for directory in (
-        paths.data_root,
-        paths.venv_root,
-        paths.model_cache,
-        paths.runs_root,
-        paths.temp_root,
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
+    paths.data_root.mkdir(parents=True, exist_ok=True)
+    for name in DATA_ROOT_SUBDIRECTORIES:
+        (paths.data_root / name).mkdir(parents=True, exist_ok=True)
 
 
 def settings_file(data_root: Path) -> Path:

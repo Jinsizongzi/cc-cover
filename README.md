@@ -145,7 +145,7 @@ CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选�
 
 ## 开发验证
 
-项目使用 Python `unittest` 覆盖扫描、固定格式渲染与校验、安全写回辅助函数、GUI 命令构建、打包契约和无默认路径契约。GitHub Actions 在 ubuntu 与 Windows 双平台并行运行单元测试（Windows 上同时包含 GUI 冒烟测试），并在 Windows 环境构建发布物：PyInstaller onedir（`--noupx`、版本信息、图标）产出 `dist\CC-Cover\`，再经 Inno Setup 编译为安装器、压缩为绿色便携包；推 tag 时两种发布物自动发布到 Releases。
+项目使用 Python `unittest` 覆盖扫描、固定格式渲染与校验、安全写回辅助函数、GUI 命令构建、打包契约和无默认路径契约。GitHub Actions 在 ubuntu 与 Windows 双平台并行运行单元测试（Windows 上同时包含 GUI 冒烟测试），并在 Windows 环境构建发布物：PyInstaller onedir（`--noupx`、版本信息、图标，排除 ASR 运行时栈）产出 `dist\CC-Cover\`，再经 Inno Setup 编译为安装器、压缩为绿色便携包；发布前对安装器（静默安装/卸载）与便携包（启动存活）做运行时冒烟，推 tag 时两种发布物自动发布到 Releases。
 
 ## 许可与更新日志
 
