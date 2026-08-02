@@ -39,8 +39,10 @@ WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 
+; 中文语言文件随仓库自带（packaging\Languages\ChineseSimplified.isl），
+; 不依赖 Inno Setup 安装是否带全语言包（choco/精简安装可能缺 ChineseSimplified.isl）。
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
