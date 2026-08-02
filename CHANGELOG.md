@@ -36,7 +36,7 @@
 
 - CI/测试增强：`tests.yml` 增加 Windows runner 与 ubuntu 并行；补齐写回/回滚安全、新格式校验、目标冲突、新扫描语义、哈希策略、faster-whisper 段换算与 GUI 冒烟测试；Windows runner 以 `PYTHONUTF8`/`PYTHONIOENCODING` 保证中文输出（#34）。
 
-## [0.3.1] - 2026-07-21
+## [0.3.1] - 2026-07-22
 
 ### 修复
 

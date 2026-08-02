@@ -3,8 +3,8 @@
 用法：cd 仓库根目录 && "python" docs/screenshots/capture.py
 输出：docs/screenshots/main.png / features.png / guide.png
 
-脚本构造真实的 CCCoverApp 窗口，等待环境检查完成后以真实渲染路径
-（_display_report）填充代表性候选数据，再截取窗口像素存为 PNG。
+脚本构造真实的 CCCoverApp 窗口，等待环境检查启动与界面刷新后，
+以真实渲染路径（_display_report）填充代表性候选数据，再截取窗口像素存为 PNG。
 """
 
 from __future__ import annotations
@@ -123,14 +123,10 @@ def main() -> int:
 
     OUTPUT.mkdir(parents=True, exist_ok=True)
     _capture(root, OUTPUT / "main.png")
-
-    app.notebook.select(app.feature_tab)
-    _pump(root, 0.5)
-    _capture(root, OUTPUT / "features.png")
-
-    app.notebook.select(app.guide_tab)
-    _pump(root, 0.5)
-    _capture(root, OUTPUT / "guide.png")
+    for tab, name in ((app.feature_tab, "features"), (app.guide_tab, "guide")):
+        app.notebook.select(tab)
+        _pump(root, 0.5)
+        _capture(root, OUTPUT / f"{name}.png")
 
     root.destroy()
     lock.release()
