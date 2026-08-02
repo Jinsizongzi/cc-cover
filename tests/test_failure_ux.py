@@ -10,11 +10,13 @@ from pathlib import Path
 
 from cc_cover.gui_support import (
     FailureInfo,
+    detect_stage,
     error_text,
     failure_info,
     failure_info_from_command,
     first_failed_sample,
     run_is_resumable,
+    stopped_message,
     terminate_process_tree,
 )
 
@@ -124,6 +126,12 @@ class FailureInfoTests(unittest.TestCase):
 
         self.assertEqual(info.stage, "质量门禁")
 
+    def test_scan_error_uses_scan_stage(self) -> None:
+        self.assertEqual(detect_stage("扫描目录失败：权限不足", "转写与写回"), "扫描")
+
+    def test_writeback_error_uses_writeback_stage(self) -> None:
+        self.assertEqual(detect_stage("写回失败：磁盘已满", "转写与写回"), "写回")
+
 
 class FirstFailedSampleTests(unittest.TestCase):
     def test_returns_first_failed_sample_from_stage_report(self) -> None:
@@ -215,6 +223,41 @@ class ErrorTextTests(unittest.TestCase):
         self.assertIn("原因：引擎字幕段无效", text)
         self.assertIn("运行目录：C:\\runs\\20260802_010203_12345", text)
         self.assertIn("已处理 44/66 个视频，产物已暂存。", text)
+
+
+class StoppedMessageTests(unittest.TestCase):
+    def test_resumable_run_mentions_staged_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "run"
+            run_dir.mkdir()
+            (run_dir / "manifest.json").write_text(
+                json.dumps({"status": "running"}), encoding="utf-8"
+            )
+            info = FailureInfo(
+                stage="转写与写回",
+                reason="用户停止",
+                run_dir=run_dir,
+            )
+
+            message = stopped_message(info)
+
+        self.assertEqual(message, "任务已停止，产物已暂存，可点击「继续中断任务」恢复。")
+
+    def test_scan_stop_mentions_no_partial_results(self) -> None:
+        info = FailureInfo(stage="扫描", reason="用户停止")
+
+        self.assertEqual(
+            stopped_message(info),
+            "扫描已停止，未展示扫描结果，可重新扫描。",
+        )
+
+    def test_stop_without_artifacts_is_honest(self) -> None:
+        info = FailureInfo(stage="环境检查", reason="用户停止")
+
+        self.assertEqual(
+            stopped_message(info),
+            "任务已停止，未产生可恢复的运行产物。",
+        )
 
 
 class TerminateProcessTreeTests(unittest.TestCase):

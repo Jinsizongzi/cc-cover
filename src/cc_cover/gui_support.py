@@ -187,6 +187,15 @@ def run_is_resumable(run_dir: Path | None) -> bool:
     return isinstance(payload, dict) and str(payload.get("status")) != "committed"
 
 
+def stopped_message(info: FailureInfo) -> str:
+    """用户主动停止任务时，日志与提示框共用的文案。"""
+    if run_is_resumable(info.run_dir):
+        return "任务已停止，产物已暂存，可点击「继续中断任务」恢复。"
+    if info.stage == "扫描":
+        return "扫描已停止，未展示扫描结果，可重新扫描。"
+    return "任务已停止，未产生可恢复的运行产物。"
+
+
 def error_text(title: str, info: FailureInfo) -> str:
     lines = [title]
     if info.file:

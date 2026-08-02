@@ -28,6 +28,7 @@ from cc_cover.gui_support import (
     runtime_paths,
     scan_command,
     setup_commands,
+    stopped_message,
     terminate_process_tree,
     transcribe_command,
 )
@@ -503,23 +504,7 @@ class CCCoverApp(ttk.Frame):
         )
         self.process = process
         assert process.stdout is not None
-        lines: list[str] = []
-        for line in process.stdout:
-            lines.append(line)
-        return_code = process.wait()
-        self.process = None
-        output = "".join(lines)
-        if self.stop_triggered:
-            raise TaskCancelled(
-                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
-            )
-        if self.cancel_requested and return_code != 0:
-            raise TaskCancelled(
-                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
-            )
-        if return_code != 0:
-            raise RuntimeError(output.strip() or f"命令执行失败：{return_code}")
-        return output
+        return self._finish_process(process, "".join(process.stdout))
 
     def _run_streaming(self, command: list[str]) -> str:
         if self.cancel_requested:
@@ -542,9 +527,13 @@ class CCCoverApp(ttk.Frame):
         for line in process.stdout:
             lines.append(line)
             self.events.put(("log", line))
+        return self._finish_process(process, "".join(lines))
+
+    def _finish_process(
+        self, process: subprocess.Popen[str], output: str
+    ) -> str:
         return_code = process.wait()
         self.process = None
-        output = "".join(lines)
         if self.stop_triggered:
             raise TaskCancelled(
                 output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
@@ -1098,14 +1087,11 @@ class CCCoverApp(ttk.Frame):
         body.pack(fill="x")
         body.columnconfigure(1, weight=1)
         resumable = run_is_resumable(info.run_dir)
-        if resumable:
-            message = "任务已停止，产物已暂存，可点击「继续中断任务」恢复。"
-        elif info.stage == "扫描":
-            message = "扫描已停止，未展示扫描结果，可重新扫描。"
-        else:
-            message = "任务已停止，未产生可恢复的运行产物。"
         ttk.Label(
-            body, text=message, style="Body.TLabel", wraplength=500
+            body,
+            text=stopped_message(info),
+            style="Body.TLabel",
+            wraplength=500,
         ).grid(row=0, column=0, columnspan=2, sticky="w")
         if info.run_dir is not None:
             self._dialog_row(body, 1, "运行目录：", str(info.run_dir))
@@ -1154,14 +1140,7 @@ class CCCoverApp(ttk.Frame):
                 elif event == "cancelled":
                     info = payload
                     self._set_busy(False, "任务已停止")
-                    if info.stage == "扫描":
-                        message = "扫描已停止，未展示扫描结果，可重新扫描。\n"
-                    else:
-                        message = (
-                            "任务已停止，产物已暂存，"
-                            "可点击「继续中断任务」恢复。\n"
-                        )
-                    self._append_log(message)
+                    self._append_log(stopped_message(info) + "\n")
                     self._show_stopped_dialog(info)
                 elif event == "error":
                     title, info = payload
