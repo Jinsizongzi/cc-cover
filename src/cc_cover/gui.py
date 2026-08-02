@@ -586,7 +586,7 @@ class CCCoverApp(ttk.Frame):
                 output = self._run_capture(
                     environment_check_command(self.paths, accelerator)
                 )
-            except TaskCancelled:
+            except TaskCancelled as exc:
                 self.events.put(
                     (
                         "cancelled",
@@ -677,7 +677,7 @@ class CCCoverApp(ttk.Frame):
                         ("安装完成", "运行环境安装并检查通过，可以开始扫描视频。"),
                     )
                 )
-            except TaskCancelled:
+            except TaskCancelled as exc:
                 self.events.put(
                     (
                         "cancelled",
@@ -717,7 +717,7 @@ class CCCoverApp(ttk.Frame):
             try:
                 self._scan_report(root, options)
                 self.events.put(("idle", "扫描完成"))
-            except TaskCancelled:
+            except TaskCancelled as exc:
                 self.events.put(
                     (
                         "cancelled",
@@ -784,7 +784,7 @@ class CCCoverApp(ttk.Frame):
                         ),
                     )
                 )
-            except TaskCancelled:
+            except TaskCancelled as exc:
                 self.events.put(
                     (
                         "cancelled",
@@ -855,7 +855,7 @@ class CCCoverApp(ttk.Frame):
                         ("任务已完成", "中断任务已继续执行并完成最终复核。"),
                     )
                 )
-            except TaskCancelled:
+            except TaskCancelled as exc:
                 self.events.put(
                     (
                         "cancelled",
