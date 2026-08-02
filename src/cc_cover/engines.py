@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import inspect
+import logging
 import math
 import os
 import subprocess
@@ -12,6 +13,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from cc_cover.models import PipelineOptions, Segment
+
+
+logger = logging.getLogger(__name__)
 
 
 class EngineError(RuntimeError):
@@ -408,14 +412,25 @@ class FasterWhisperEngine:
             raise EngineError(f"faster-whisper 推理失败：{audio_path}: {exc}") from exc
         elapsed = time.perf_counter() - started
         segments: list[Segment] = []
+        duration_ms = round(duration_seconds * 1000.0)
         for raw in raw_segments:
-            start = max(0, round(float(raw.start) * 1000.0))
+            start = min(duration_ms, max(0, round(float(raw.start) * 1000.0)))
             end = min(
-                round(duration_seconds * 1000.0),
+                duration_ms,
                 max(start + 1, round(float(raw.end) * 1000.0)),
             )
             text = str(raw.text).strip()
             if not text:
+                continue
+            if end <= start:
+                logger.warning(
+                    "跳过零长度 faster-whisper 段：start_ms=%s end_ms=%s duration_ms=%s "
+                    "audio=%s",
+                    start,
+                    end,
+                    duration_ms,
+                    audio_path,
+                )
                 continue
             metadata = {
                 "avg_logprob": getattr(raw, "avg_logprob", None),

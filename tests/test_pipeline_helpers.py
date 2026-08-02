@@ -10,8 +10,14 @@ from cc_cover.engines import (
     local_faster_whisper_model,
     local_funasr_model,
 )
-from cc_cover.models import PipelineOptions
-from cc_cover.pipeline import options_from_dict, options_to_dict, write_bytes_atomic
+from cc_cover.models import PipelineOptions, Segment
+from cc_cover.pipeline import (
+    PipelineError,
+    options_from_dict,
+    options_to_dict,
+    validate_segments,
+    write_bytes_atomic,
+)
 
 
 class PipelineHelperTests(unittest.TestCase):
@@ -83,6 +89,30 @@ class PipelineHelperTests(unittest.TestCase):
                 else:
                     os.environ[name] = value
             tempfile.tempdir = previous_tempdir
+
+    def test_validate_segments_error_includes_engine_and_video_context(self) -> None:
+        segments = [
+            Segment(0, 1000, "first"),
+            Segment(1000, 1000, "zero-length tail"),
+        ]
+
+        with self.assertRaises(PipelineError) as caught:
+            validate_segments(
+                segments,
+                10.0,
+                engine="faster-whisper",
+                sample_id="CC-MISSING-00047",
+                video_path="E:/videos/sample.mp4",
+            )
+
+        message = str(caught.exception)
+        self.assertIn("#1", message)
+        self.assertIn("faster-whisper", message)
+        self.assertIn("CC-MISSING-00047", message)
+        self.assertIn("sample.mp4", message)
+        self.assertIn("start_ms=1000", message)
+        self.assertIn("end_ms=1000", message)
+        self.assertIn("duration_ms=10000", message)
 
 
 if __name__ == "__main__":

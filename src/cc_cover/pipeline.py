@@ -286,9 +286,20 @@ def longest_duplicate_run(segments: Sequence[Segment]) -> int:
     return longest
 
 
-def validate_segments(segments: Sequence[Segment], duration_seconds: float) -> None:
+def validate_segments(
+    segments: Sequence[Segment],
+    duration_seconds: float,
+    *,
+    engine: str | None = None,
+    sample_id: str | None = None,
+    video_path: str | None = None,
+) -> None:
+    context = (
+        f"engine={engine}, sample={sample_id}, video={video_path}, "
+        f"duration_ms={round(duration_seconds * 1000.0)}"
+    )
     if not segments:
-        raise PipelineError("引擎字幕段为空")
+        raise PipelineError(f"引擎字幕段为空：{context}")
     previous_start = -1
     maximum_end = math.ceil(duration_seconds * 1000.0) + 5000
     for index, segment in enumerate(segments):
@@ -299,7 +310,10 @@ def validate_segments(segments: Sequence[Segment], duration_seconds: float) -> N
             or segment.end_ms > maximum_end
             or not segment.text.strip()
         ):
-            raise PipelineError(f"引擎字幕段无效：#{index}")
+            raise PipelineError(
+                f"引擎字幕段无效：#{index} "
+                f"({context}, start_ms={segment.start_ms}, end_ms={segment.end_ms})"
+            )
         previous_start = segment.start_ms
 
 
@@ -421,7 +435,13 @@ class SubtitlePipeline:
         if payload.get("engine") != engine:
             raise PipelineError(f"{engine} 引擎声明不匹配")
         segments = [Segment.from_dict(item) for item in payload.get("segments", [])]
-        validate_segments(segments, float(payload["duration_seconds"]))
+        validate_segments(
+            segments,
+            float(payload["duration_seconds"]),
+            engine=engine,
+            sample_id=candidate.sample_id,
+            video_path=str(candidate.video_path),
+        )
         return payload
 
     def output_complete(self, engine: str, candidate: Candidate) -> bool:
@@ -478,7 +498,13 @@ class SubtitlePipeline:
                 )
                 if not fingerprints_match(after, candidate.video_fingerprint):
                     raise PipelineError(f"视频在转写后发生变化：{candidate.video_path}")
-                validate_segments(segments, duration)
+                validate_segments(
+                    segments,
+                    duration,
+                    engine=engine_name,
+                    sample_id=candidate.sample_id,
+                    video_path=str(candidate.video_path),
+                )
                 write_json_atomic(
                     self.engine_output(engine_name, candidate.sample_id),
                     {
