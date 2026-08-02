@@ -32,6 +32,84 @@ _LOCK_FILENAME = "instance.lock"
 _ERROR_ALREADY_EXISTS = 183
 CLEANUP_WARNING_BYTES = 5 * 1024**3
 
+# 磁盘预检与安装进度使用的字节估算（仅用于提示与粗估剩余，非精确计量）。
+# torch + torchaudio 轮子：CPU 约 330MB，CUDA cu121 约 2.7GB，均留余量。
+TORCH_CPU_BYTES = 400 * 1024**2
+TORCH_CUDA_BYTES = 3200 * 1024**2
+# 默认模型：FunASR（paraformer-large + fsmn-vad + ct-punc）约 2GB，large-v3-turbo 约 1.6GB。
+FUNASR_MODELS_BYTES = 2500 * 1024**2
+FAST_WHISPER_MODELS_BYTES = 1600 * 1024**2
+# 其余 ASR 依赖轮子（funasr、faster-whisper、ctranslate2 等）约 250MB。
+ASR_DEPENDENCIES_BYTES = 400 * 1024**2
+# venv/临时目录开销与磁盘碎片余量。
+INSTALL_BUFFER_BYTES = 1024**3
+
+
+def install_download_bytes(device: str) -> int:
+    """安装阶段 pip 实际下载量的估算（torch 轮子 + ASR 依赖，不含模型）。
+
+    用于安装进度条的总量与剩余时间估算；与``estimate_install_required_bytes``
+    不同——后者额外计入首次运行需下载的模型与余量，用于磁盘预检。
+    """
+    torch_bytes = TORCH_CUDA_BYTES if device == "cuda" else TORCH_CPU_BYTES
+    return torch_bytes + ASR_DEPENDENCIES_BYTES
+
+
+def estimate_install_required_bytes(device: str) -> int:
+    """安装运行环境并下载默认模型的总需求估算，用于磁盘预检提示。"""
+    return (
+        install_download_bytes(device)
+        + FUNASR_MODELS_BYTES
+        + FAST_WHISPER_MODELS_BYTES
+        + INSTALL_BUFFER_BYTES
+    )
+
+
+@dataclass(frozen=True)
+class DiskCheck:
+    """目标盘剩余空间预检结果：所需、剩余与是否充足。"""
+
+    target: Path
+    required_bytes: int
+    free_bytes: int
+    sufficient: bool
+
+
+def disk_precheck(directory: Path, required_bytes: int) -> DiskCheck:
+    """检查目标目录所在磁盘能否容纳所需字节；目标盘随数据根联动。
+
+    目标目录尚不存在时先创建（数据根首次安装前可能尚未建立）。
+    """
+    target = Path(directory).expanduser().resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(target)
+    required = max(0, int(required_bytes))
+    return DiskCheck(
+        target=target,
+        required_bytes=required,
+        free_bytes=int(usage.free),
+        sufficient=int(usage.free) >= required,
+    )
+
+
+def disk_precheck_text(check: DiskCheck, runs_bytes: int = 0) -> str:
+    """磁盘预检提示文案：至少需要 N，当前剩余 M；不足时建议先清理运行目录。"""
+    lines = [
+        f"至少需要 {format_size(check.required_bytes)}，"
+        f"目标盘当前剩余 {format_size(check.free_bytes)}。"
+    ]
+    if check.sufficient:
+        lines.append("磁盘空间充足。")
+        return "\n".join(lines)
+    lines.append("磁盘空间不足。")
+    if runs_bytes > 0:
+        lines.append(
+            f"建议先清理运行目录（当前占用 {format_size(runs_bytes)}）后再尝试。"
+        )
+    else:
+        lines.append("建议清理该磁盘上的其他文件后再尝试。")
+    return "\n".join(lines)
+
 
 @dataclass(frozen=True)
 class FailureInfo:
@@ -321,6 +399,64 @@ def delete_runs(runs: Sequence[RunInfo]) -> int:
     return deleted
 
 
+def _reset_directory(directory: Path) -> None:
+    """删除目录内容并重建为空目录；目录不存在时直接创建。"""
+    target = Path(directory)
+    if target.is_dir():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+
+
+def clean_model_cache(paths: RuntimePaths) -> None:
+    """删除模型缓存目录并重建；下次运行需重新下载模型。"""
+    _reset_directory(paths.model_cache)
+
+
+def local_data_usage(paths: RuntimePaths) -> int:
+    """venv、模型缓存、运行记录与临时目录的总占用字节数。"""
+    directories = (
+        paths.venv_root,
+        paths.model_cache,
+        paths.runs_root,
+        paths.temp_root,
+    )
+    return sum(directory_size(directory) for directory in directories)
+
+
+def clear_local_data(paths: RuntimePaths) -> None:
+    """删除 venv、模型缓存、运行记录与临时目录并重建。
+
+    数据根本身与其中的 settings.json 保留（数据根指针不能丢）。
+    """
+    for directory in (
+        paths.venv_root,
+        paths.model_cache,
+        paths.runs_root,
+        paths.temp_root,
+    ):
+        _reset_directory(directory)
+
+
+def model_cache_cleanup_text(size_bytes: int) -> str:
+    """清理模型缓存的确认文案：删除需重新下载。"""
+    return (
+        f"将删除模型缓存（共 {format_size(size_bytes)}），"
+        "下次运行需重新下载模型。\n\n确定继续吗？"
+    )
+
+
+def clear_all_data_text(usage_bytes: int) -> str:
+    """清理全部本地数据的确认文案：列出删除项并显示总占用。"""
+    lines = [
+        f"将删除 venv、模型缓存、运行记录与临时文件"
+        f"（共 {format_size(usage_bytes)}），不可恢复。",
+        "",
+        "删除后需重新安装运行环境，并重新下载模型。",
+        "确定继续吗？",
+    ]
+    return "\n".join(lines)
+
+
 def format_size(size_bytes: int) -> str:
     """字节数转人类可读大小；小于 1KB 按字节，否则保留一位小数。"""
     value = float(size_bytes)
@@ -411,6 +547,121 @@ def progress_text(snapshot: ProgressSnapshot) -> str:
         f"第 {snapshot.current} / 共 {snapshot.total} 个（{snapshot.percent}%）",
         f"已用时 {format_duration(snapshot.elapsed_seconds)}",
     ]
+    if snapshot.remaining_seconds is not None:
+        parts.append(f"约剩余 {format_duration(snapshot.remaining_seconds)}")
+    return " · ".join(parts)
+
+
+_DOWNLOAD_HEADER_PATTERN = re.compile(
+    r"Downloading\s+.*?\((?P<size>\d+(?:\.\d+)?)\s*(?P<unit>[KMGT]?B)\)",
+    re.IGNORECASE,
+)
+_BAR_FRAME_PATTERN = re.compile(
+    r"(?P<current>\d+(?:\.\d+)?)/(?P<total>\d+(?:\.\d+)?)\s*(?P<unit>[KMGT]?B)",
+    re.IGNORECASE,
+)
+_BYTE_UNITS = {"B": 1, "KB": 1024, "MB": 1024**2, "GB": 1024**3, "TB": 1024**4}
+
+
+def _bytes_from_quantity(value: str, unit: str) -> int:
+    """把「数值 + 单位」组合换算为字节；单位缺失时按字节处理。"""
+    factor = _BYTE_UNITS.get(str(unit).upper(), 1)
+    return int(round(float(value) * factor))
+
+
+@dataclass(frozen=True)
+class InstallProgressSnapshot:
+    """安装进度快照：当前组件、已下载估算、总量与粗估剩余。"""
+
+    component_index: int
+    component_count: int
+    downloaded_bytes: int
+    total_bytes: int
+    percent: int
+    speed_bytes: float | None
+    remaining_seconds: float | None
+
+
+class InstallProgressTracker:
+    """解析 pip 安装输出的下载信号，跟踪「组件 N/M + 已下载约 X + 约剩余」。
+
+    管道环境下 pip 不输出进度条，唯一可靠的下载信号是 ``Downloading <包> (<大小>)``
+    头：每个工件开始下载时宣布其大小，逐项累计即近似已下载量（标注「约」）。
+    若个别环境出现 rich/tqdm 风格的 ``当前/总量`` 进度帧，则取其中的当前值。
+    """
+
+    def __init__(
+        self,
+        total_bytes: int,
+        component_count: int,
+        started_at: float = 0.0,
+    ):
+        self.total_bytes = max(0, int(total_bytes))
+        self.component_count = max(0, int(component_count))
+        self.component_index = 0
+        self.started_at = float(started_at)
+        self._announced_bytes = 0
+        self._bar_bytes = 0
+
+    def on_component(self, index: int) -> None:
+        """工作线程进入下一个组件时调用，记录组件序号（从 1 开始）。"""
+        self.component_index = max(0, int(index))
+
+    def on_output(self, chunk: str) -> None:
+        """消费 pip 输出片段，累计已下载估算。"""
+        if not chunk:
+            return
+        for match in _DOWNLOAD_HEADER_PATTERN.finditer(chunk):
+            self._announced_bytes += _bytes_from_quantity(
+                match.group("size"), match.group("unit")
+            )
+        for match in _BAR_FRAME_PATTERN.finditer(chunk):
+            current = _bytes_from_quantity(
+                match.group("current"), match.group("unit")
+            )
+            if current > self._bar_bytes:
+                self._bar_bytes = current
+
+    def snapshot(self, now: float | None = None) -> InstallProgressSnapshot:
+        now = time.monotonic() if now is None else float(now)
+        elapsed = max(0.0, now - self.started_at)
+        downloaded = max(self._announced_bytes, self._bar_bytes)
+        if self.total_bytes:
+            downloaded = min(downloaded, self.total_bytes)
+        else:
+            downloaded = 0
+        # 进度条百分比按组件完成度计算（已完成组件数 / 总数），避免在
+        # 安装收尾阶段因下载量提前到 100% 造成误导；下载细节由文案展示。
+        completed = max(0, self.component_index - 1)
+        percent = (
+            round(completed / self.component_count * 100)
+            if self.component_count
+            else 0
+        )
+        speed: float | None = None
+        remaining: float | None = None
+        if elapsed >= 2.0 and downloaded > 0:
+            speed = downloaded / elapsed
+            if self.total_bytes > downloaded:
+                remaining = (self.total_bytes - downloaded) / speed
+        return InstallProgressSnapshot(
+            component_index=self.component_index,
+            component_count=self.component_count,
+            downloaded_bytes=downloaded,
+            total_bytes=self.total_bytes,
+            percent=percent,
+            speed_bytes=speed,
+            remaining_seconds=remaining,
+        )
+
+
+def install_progress_text(snapshot: InstallProgressSnapshot) -> str:
+    """安装进度显示文本：组件 N/M · 已下载约 X · 约剩余。"""
+    parts = [
+        f"组件 {snapshot.component_index}/{snapshot.component_count}"
+    ]
+    if snapshot.downloaded_bytes > 0:
+        parts.append(f"已下载约 {format_size(snapshot.downloaded_bytes)}")
     if snapshot.remaining_seconds is not None:
         parts.append(f"约剩余 {format_duration(snapshot.remaining_seconds)}")
     return " · ".join(parts)

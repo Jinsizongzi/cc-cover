@@ -19,27 +19,39 @@ from cc_cover.gui_support import (
     GUI_DEVICE_CHOICES,
     GuiSettings,
     GuiOptions,
+    InstallProgressTracker,
     ProgressTracker,
     RuntimePaths,
     SettingsError,
     SingleInstanceLock,
     apply_data_root,
+    clean_model_cache,
+    clear_all_data_text,
+    clear_local_data,
     command_environment,
     confirmation_text,
     default_data_root,
     delete_runs,
     device_probe_commands,
+    directory_size,
+    disk_precheck,
+    disk_precheck_text,
     ensure_data_root,
     environment_check_command,
     environment_status_label,
     error_text,
+    estimate_install_required_bytes,
     failure_info_from_command,
     first_failed_sample,
     focus_existing_window,
     format_duration,
     format_size,
+    install_download_bytes,
+    install_progress_text,
     list_runs,
     load_gui_settings,
+    local_data_usage,
+    model_cache_cleanup_text,
     parsed_device,
     parsed_nvidia_probe,
     play_completion_sound,
@@ -121,7 +133,7 @@ GUIDE_TEXT = """操作指南
 
 1. 打开 CC-Cover.exe；若程序所在目录不可写（例如安装到 Program Files），软件会先引导选择数据目录。
 2. 软件会自动检测运行设备（有可用 GPU 默认 NVIDIA GPU，否则 CPU），也可在“运行环境”区域手动切换。
-3. 点击“安装 / 修复运行环境”。软件会自动创建隔离环境并安装所需组件，不需要打开命令行窗口。
+3. 点击“安装 / 修复运行环境”。软件会先检查目标盘剩余空间（按所选设备与默认模型估算），不足时提示所需与剩余并建议先清理运行目录；安装期间显示当前组件、已下载大小与按速度粗估的剩余时间。
 4. 等待状态显示“运行环境已就绪”。首次安装耗时取决于网络速度。
 5. 切换运行设备后，软件会自动重新检查环境；如果当前环境不匹配所选设备，会提示重新安装 / 修复运行环境。
 
@@ -149,6 +161,8 @@ GUIDE_TEXT = """操作指南
 • 视频哈希保护：处理前计算视频 SHA-256，安全性更高，但首次扫描大型目录会更慢。
 • FFmpeg：通常无需指定；只有自动检测失败时才选择 ffmpeg.exe。
 • 数据目录：默认使用程序所在目录（便携模式），保存运行环境、模型缓存、运行记录与设置文件；可在“运行环境”区域点击“更改…”切换，切换后需重新安装运行环境，模型缓存可手动复制。
+• 模型缓存：“运行环境”区域显示缓存占用，可“打开缓存位置”或“清理模型缓存”（清理前需确认，清理后下次运行需重新下载模型）。
+• 清理全部本地数据：删除运行环境、模型缓存、运行记录与临时文件，删除前需确认并显示总占用；删除后需重新安装运行环境并重新下载模型。
 
 注意事项
 
@@ -190,6 +204,8 @@ class CCCoverApp(ttk.Frame):
         self.progress_var = tk.StringVar(value="")
         self._progress_tracker: ProgressTracker | None = None
         self._session_started_at: float | None = None
+        self.cache_size_var = tk.StringVar(value="检查中")
+        self._install_tracker: InstallProgressTracker | None = None
         self._save_after_id: str | None = None
         self._applying_device_value = False
         self._device_recheck_after_id: str | None = None
@@ -208,6 +224,7 @@ class CCCoverApp(ttk.Frame):
         self.device.trace_add("write", self._on_device_changed)
         self.master.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_events)
+        self.after(200, self._refresh_cache_display)
         self.after(350, self.check_environment)
 
     def _load_settings(self) -> GuiSettings:
@@ -366,6 +383,36 @@ class CCCoverApp(ttk.Frame):
             command=self.change_data_root,
         )
         self.data_root_button.grid(row=1, column=3, sticky="e", pady=(8, 0))
+        ttk.Label(
+            environment_panel, text="模型缓存：", style="Body.TLabel"
+        ).grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(
+            environment_panel,
+            textvariable=self.cache_size_var,
+            style="Body.TLabel",
+        ).grid(row=2, column=1, sticky="w", padx=(14, 0), pady=(8, 0))
+        self.open_cache_button = ttk.Button(
+            environment_panel,
+            text="打开缓存位置",
+            style="Action.TButton",
+            command=self.open_model_cache,
+        )
+        self.open_cache_button.grid(row=2, column=2, padx=(12, 8), pady=(8, 0))
+        self.clear_cache_button = ttk.Button(
+            environment_panel,
+            text="清理模型缓存",
+            style="Action.TButton",
+            command=self.clear_model_cache,
+        )
+        self.clear_cache_button.grid(row=2, column=3, sticky="e", pady=(8, 0))
+        self.clear_all_data_button = ttk.Button(
+            environment_panel,
+            text="清理全部本地数据",
+            command=self.clear_all_data,
+        )
+        self.clear_all_data_button.grid(
+            row=3, column=3, sticky="e", pady=(8, 0)
+        )
 
         path_panel = self._panel(self.work_tab)
         path_panel.columnconfigure(0, weight=1)
@@ -626,6 +673,9 @@ class CCCoverApp(ttk.Frame):
             self.device_cpu_radio,
             self.setup_button,
             self.data_root_button,
+            self.open_cache_button,
+            self.clear_cache_button,
+            self.clear_all_data_button,
             self.path_entry,
             self.choose_button,
             self.scan_button,
@@ -811,6 +861,7 @@ class CCCoverApp(ttk.Frame):
         self.lock = new_lock
         previous_lock.release()
         self.data_root_path.set(str(self.paths.data_root))
+        self._refresh_cache_display()
         self.environment_ready = False
         self.environment_status.set("需要重新安装")
         messagebox.showinfo(
@@ -907,6 +958,24 @@ class CCCoverApp(ttk.Frame):
         )
 
     def setup_environment(self) -> None:
+        if self.busy:
+            return
+        try:
+            required = estimate_install_required_bytes(self.device.get())
+            check = disk_precheck(self.paths.data_root, required)
+            runs_bytes = runs_total_size(list_runs(self.paths.runs_root))
+        except OSError as exc:
+            messagebox.showerror("磁盘预检失败", str(exc), parent=self.master)
+            return
+        if not check.sufficient:
+            proceed = messagebox.askyesno(
+                "磁盘空间不足",
+                disk_precheck_text(check, runs_bytes) + "\n\n仍要继续安装吗？",
+                parent=self.master,
+            )
+            if not proceed:
+                return
+
         def worker() -> None:
             chunks: list[str] = []
             try:
@@ -922,9 +991,18 @@ class CCCoverApp(ttk.Frame):
                             "将强制重装 GPU 版 PyTorch，以便覆盖已安装的 CPU 包。\n",
                         )
                     )
+                self.events.put(
+                    (
+                        "install_start",
+                        (install_download_bytes(device), len(commands)),
+                    )
+                )
                 for index, command in enumerate(commands, start=1):
                     self.events.put(
                         ("status", f"正在安装组件 {index}/{len(commands)}…")
+                    )
+                    self.events.put(
+                        ("install_component", (index, len(commands)))
                     )
                     chunks.append(self._run_streaming(command))
                 output = self._run_capture(
@@ -1308,6 +1386,57 @@ class CCCoverApp(ttk.Frame):
             command=dialog.destroy,
         ).pack(side="right", padx=(0, 8))
 
+    def _refresh_cache_display(self) -> None:
+        self.cache_size_var.set(format_size(directory_size(self.paths.model_cache)))
+
+    def open_model_cache(self) -> None:
+        self._open_directory(self.paths.model_cache)
+
+    def clear_model_cache(self) -> None:
+        if self.busy:
+            return
+        size = directory_size(self.paths.model_cache)
+        confirmed = messagebox.askyesno(
+            "清理模型缓存",
+            model_cache_cleanup_text(size),
+            parent=self.master,
+        )
+        if not confirmed:
+            return
+        try:
+            clean_model_cache(self.paths)
+        except OSError as exc:
+            messagebox.showerror("清理失败", str(exc), parent=self.master)
+            return
+        self._refresh_cache_display()
+        messagebox.showinfo(
+            "清理完成", "模型缓存已清理，下次运行将重新下载模型。", parent=self.master
+        )
+
+    def clear_all_data(self) -> None:
+        if self.busy:
+            return
+        usage = local_data_usage(self.paths)
+        confirmed = messagebox.askyesno(
+            "清理全部本地数据", clear_all_data_text(usage), parent=self.master
+        )
+        if not confirmed:
+            return
+        try:
+            clear_local_data(self.paths)
+        except OSError as exc:
+            messagebox.showerror("清理失败", str(exc), parent=self.master)
+            return
+        self._refresh_cache_display()
+        self.environment_ready = False
+        self.environment_status.set("需要重新安装")
+        messagebox.showinfo(
+            "清理完成",
+            "venv、模型缓存、运行记录与临时文件已删除。\n"
+            "请点击“安装 / 修复运行环境”重新安装。",
+            parent=self.master,
+        )
+
     def clear_log(self) -> None:
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
@@ -1516,18 +1645,53 @@ class CCCoverApp(ttk.Frame):
         self.progress_var.set(progress_text(snapshot))
 
     def _on_progress_line(self, line: str) -> None:
+        if self._install_tracker is not None:
+            self._install_tracker.on_output(line)
+            self._refresh_install_progress()
+            return
         if self._progress_tracker is None:
             return
         self._progress_tracker.on_progress_line(line)
         self._refresh_progress()
 
     def _clear_progress(self) -> None:
-        if self._progress_tracker is None:
+        if self._progress_tracker is None and self._install_tracker is None:
             return
         self._progress_tracker = None
         self._session_started_at = None
+        self._install_tracker = None
         self.progress_var.set("")
         self.progress.configure(mode="indeterminate", value=0)
+
+    def _start_install_progress(self, total_bytes: int, component_count: int) -> None:
+        self._install_tracker = InstallProgressTracker(
+            total_bytes=total_bytes,
+            component_count=component_count,
+            started_at=time.monotonic(),
+        )
+        self.progress.configure(mode="determinate", maximum=100, value=0)
+        self.progress.stop()
+        self._refresh_install_progress()
+        self.after(500, self._schedule_install_progress_refresh)
+
+    def _on_install_component(self, index: int, count: int) -> None:
+        if self._install_tracker is not None:
+            self._install_tracker.on_component(index)
+            self._refresh_install_progress()
+
+    def _schedule_install_progress_refresh(self) -> None:
+        if self._install_tracker is None:
+            return
+        self._refresh_install_progress()
+        self.after(500, self._schedule_install_progress_refresh)
+
+    def _refresh_install_progress(self) -> None:
+        tracker = self._install_tracker
+        if tracker is None:
+            return
+        snapshot = tracker.snapshot()
+        self.progress.configure(value=snapshot.percent)
+        self.progress_var.set(install_progress_text(snapshot))
 
     def _session_elapsed(self) -> float | None:
         """本次运行会话的已耗时（进度开始到结束），用于完成提示音的判断。"""
@@ -1706,6 +1870,12 @@ class CCCoverApp(ttk.Frame):
                     self._on_progress_line(str(payload))
                 elif event == "progress_start":
                     self._start_progress(int(payload))
+                elif event == "install_start":
+                    total_bytes, component_count = payload
+                    self._start_install_progress(total_bytes, component_count)
+                elif event == "install_component":
+                    index, count = payload
+                    self._on_install_component(index, count)
                 elif event == "confirm_start":
                     candidate_count, excluded_count, result_queue = payload
                     self._show_confirm_start_dialog(
