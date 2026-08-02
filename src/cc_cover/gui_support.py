@@ -29,6 +29,7 @@ ASR_DEPENDENCIES = (
 
 _LOCK_FILENAME = "instance.lock"
 _ERROR_ALREADY_EXISTS = 183
+CLEANUP_WARNING_BYTES = 5 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -178,6 +179,12 @@ def failure_info(
     )
 
 
+def run_dir_from_output(output: str) -> Path | None:
+    """从 CLI 输出解析运行目录；取最后一个「运行目录：」匹配。"""
+    matches = RUN_DIR_PATTERN.findall(output or "")
+    return Path(matches[-1]) if matches else None
+
+
 def failure_info_from_command(
     chunks: Sequence[str],
     exc: BaseException,
@@ -227,6 +234,99 @@ def run_is_resumable(run_dir: Path | None) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     return isinstance(payload, dict) and str(payload.get("status")) != "committed"
+
+
+@dataclass(frozen=True)
+class RunInfo:
+    """运行目录清理列表中的一行：标识、状态与占用。"""
+
+    run_id: str
+    path: Path
+    status: str
+    size_bytes: int
+    created_at_utc: str | None = None
+
+
+def _manifest_status(run_dir: Path) -> tuple[str, str | None]:
+    """读取运行目录 manifest 的状态与创建时间；缺失或无效时视为 unknown。"""
+    manifest = run_dir / "manifest.json"
+    if not manifest.is_file():
+        return "unknown", None
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return "unknown", None
+    if not isinstance(payload, dict):
+        return "unknown", None
+    status = payload.get("status")
+    created = payload.get("created_at_utc")
+    return (
+        str(status) if isinstance(status, str) else "unknown",
+        str(created) if isinstance(created, str) else None,
+    )
+
+
+def directory_size(path: Path) -> int:
+    """递归统计目录占用字节数；无法读取的文件跳过。"""
+    total = 0
+    for item in Path(path).rglob("*"):
+        if item.is_file():
+            try:
+                total += item.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def list_runs(runs_root: Path) -> list[RunInfo]:
+    """枚举运行根下的运行目录，按名称排序；跳过普通文件。"""
+    root = Path(runs_root).expanduser().resolve()
+    runs: list[RunInfo] = []
+    if not root.is_dir():
+        return runs
+    for child in sorted(root.iterdir(), key=lambda item: str(item.name).casefold()):
+        if not child.is_dir():
+            continue
+        status, created_at = _manifest_status(child)
+        resolved = child.resolve()
+        runs.append(
+            RunInfo(
+                run_id=child.name,
+                path=resolved,
+                status=status,
+                size_bytes=directory_size(resolved),
+                created_at_utc=created_at,
+            )
+        )
+    return runs
+
+
+def runs_total_size(runs: Sequence[RunInfo]) -> int:
+    """所有列出的运行目录总占用字节数。"""
+    return sum(run.size_bytes for run in runs)
+
+
+def delete_runs(runs: Sequence[RunInfo]) -> int:
+    """删除选中的运行目录；跳过已不存在或不存在的路径，返回实际删除数。"""
+    deleted = 0
+    for run in runs:
+        if not run.path.is_dir():
+            continue
+        shutil.rmtree(run.path)
+        deleted += 1
+    return deleted
+
+
+def format_size(size_bytes: int) -> str:
+    """字节数转人类可读大小；小于 1KB 按字节，否则保留一位小数。"""
+    value = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{int(size_bytes)} B"
 
 
 def stopped_message(info: FailureInfo) -> str:
