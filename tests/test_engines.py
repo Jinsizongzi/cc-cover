@@ -81,6 +81,47 @@ class FasterWhisperEngineTests(unittest.TestCase):
         self.assertNotIn("hotwords", engine.model.last_kwargs)
         self.assertNotIn("initial_prompt", engine.model.last_kwargs)
 
+    def test_segment_seconds_convert_to_milliseconds_with_rounding(self) -> None:
+        engine = self._engine([raw_segment(0.0, 1.234)])
+
+        segments, _metadata = engine.transcribe(Path("audio.wav"), 5.0, [])
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(segments[0].start_ms, 0)
+        self.assertEqual(segments[0].end_ms, 1234)
+
+    def test_negative_start_is_clamped_to_zero(self) -> None:
+        engine = self._engine([raw_segment(-0.5, 2.0)])
+
+        segments, _metadata = engine.transcribe(Path("audio.wav"), 5.0, [])
+
+        self.assertEqual(segments[0].start_ms, 0)
+
+    def test_end_beyond_duration_is_clamped_to_duration(self) -> None:
+        engine = self._engine([raw_segment(0.0, 10.0)])
+
+        segments, _metadata = engine.transcribe(Path("audio.wav"), 5.0, [])
+
+        self.assertEqual(segments[0].end_ms, 5000)
+
+    def test_blank_text_segment_is_skipped(self) -> None:
+        engine = self._engine(
+            [raw_segment(0.0, 2.0, "  "), raw_segment(2.0, 4.0, "hello")]
+        )
+
+        segments, _metadata = engine.transcribe(Path("audio.wav"), 5.0, [])
+
+        self.assertEqual([segment.text for segment in segments], ["hello"])
+
+    def test_segment_metadata_is_preserved(self) -> None:
+        engine = self._engine([raw_segment(0.0, 5.0)])
+
+        segments, _metadata = engine.transcribe(Path("audio.wav"), 5.0, [])
+
+        self.assertEqual(segments[0].metadata["avg_logprob"], -0.5)
+        self.assertEqual(segments[0].metadata["no_speech_prob"], 0.01)
+        self.assertEqual(segments[0].metadata["compression_ratio"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
