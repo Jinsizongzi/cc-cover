@@ -14,6 +14,7 @@ from typing import Any, Callable
 from cc_cover import __version__
 from cc_cover.gui_support import (
     FailureInfo,
+    GuiSettings,
     GuiOptions,
     RuntimePaths,
     SettingsError,
@@ -26,11 +27,13 @@ from cc_cover.gui_support import (
     error_text,
     failure_info_from_command,
     first_failed_sample,
+    load_gui_settings,
     python_candidates,
     resume_command,
     resolve_data_root,
     run_is_resumable,
     runtime_paths,
+    save_gui_settings,
     scan_command,
     setup_commands,
     stopped_message,
@@ -137,21 +140,45 @@ class CCCoverApp(ttk.Frame):
         self.environment_ready = False
         self.last_report: dict[str, Any] | None = None
 
-        self.scan_path = tk.StringVar()
-        self.device = tk.StringVar(value="auto")
-        self.accelerator = tk.StringVar(value="cuda")
-        self.ffmpeg = tk.StringVar()
-        self.hash_videos = tk.BooleanVar(value=True)
+        settings = self._load_settings()
+        self.scan_path = tk.StringVar(value=settings.scan_path)
+        self.device = tk.StringVar(value=settings.device)
+        self.accelerator = tk.StringVar(value=settings.accelerator)
+        self.ffmpeg = tk.StringVar(value=settings.ffmpeg)
+        self.hash_videos = tk.BooleanVar(value=settings.hash_videos)
         self.status = tk.StringVar(value="正在检查运行环境…")
         self.environment_status = tk.StringVar(value="检查中")
         self.summary = tk.StringVar(value="尚未选择扫描目录")
+        self._save_after_id: str | None = None
 
         self._configure_window()
         self._configure_styles()
         self._build_interface()
+        for variable in (
+            self.scan_path,
+            self.device,
+            self.accelerator,
+            self.ffmpeg,
+            self.hash_videos,
+        ):
+            variable.trace_add("write", self._on_settings_changed)
         self.master.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_events)
         self.after(350, self.check_environment)
+
+    def _load_settings(self) -> GuiSettings:
+        try:
+            return load_gui_settings(self.paths.data_root)
+        except SettingsError as exc:
+            self.master.after(
+                0,
+                lambda: messagebox.showwarning(
+                    "设置文件无效",
+                    f"无法读取 settings.json，已使用默认设置。\n\n{exc}",
+                    parent=self.master,
+                ),
+            )
+            return GuiSettings()
 
     def _configure_window(self) -> None:
         self.master.title(f"CC-Cover {__version__} · 双模型字幕补全")
@@ -254,18 +281,20 @@ class CCCoverApp(ttk.Frame):
         self.environment_label.grid(row=0, column=1, sticky="w", padx=(14, 0))
         accelerator_box = ttk.Frame(environment_panel, style="Panel.TFrame")
         accelerator_box.grid(row=0, column=2, padx=(12, 8))
-        ttk.Radiobutton(
+        self.accelerator_gpu_radio = ttk.Radiobutton(
             accelerator_box,
             text="NVIDIA GPU",
             variable=self.accelerator,
             value="cuda",
-        ).pack(side="left")
-        ttk.Radiobutton(
+        )
+        self.accelerator_gpu_radio.pack(side="left")
+        self.accelerator_cpu_radio = ttk.Radiobutton(
             accelerator_box,
             text="CPU",
             variable=self.accelerator,
             value="cpu",
-        ).pack(side="left", padx=(8, 0))
+        )
+        self.accelerator_cpu_radio.pack(side="left", padx=(8, 0))
         self.setup_button = ttk.Button(
             environment_panel,
             text="安装 / 修复运行环境",
@@ -330,23 +359,26 @@ class CCCoverApp(ttk.Frame):
             width=9,
         )
         self.device_combo.pack(side="left", padx=(4, 18))
-        ttk.Checkbutton(
+        self.hash_check = ttk.Checkbutton(
             options_row, text="视频哈希保护", variable=self.hash_videos
-        ).pack(side="left")
+        )
+        self.hash_check.pack(side="left")
 
         ffmpeg_row = ttk.Frame(options_panel, style="Panel.TFrame")
         ffmpeg_row.pack(fill="x", pady=(10, 0))
         ttk.Label(
             ffmpeg_row, text="FFmpeg（通常留空）：", style="Body.TLabel"
         ).pack(side="left")
-        ttk.Entry(ffmpeg_row, textvariable=self.ffmpeg).pack(
+        self.ffmpeg_entry = ttk.Entry(ffmpeg_row, textvariable=self.ffmpeg)
+        self.ffmpeg_entry.pack(
             side="left", fill="x", expand=True, padx=(8, 8)
         )
-        ttk.Button(
+        self.ffmpeg_button = ttk.Button(
             ffmpeg_row,
             text="选择文件",
             command=self.choose_ffmpeg,
-        ).pack(side="left")
+        )
+        self.ffmpeg_button.pack(side="left")
 
         candidate_panel = ttk.Frame(
             self.work_tab, style="Panel.TFrame", padding=(18, 14)
@@ -459,6 +491,38 @@ class CCCoverApp(ttk.Frame):
             ffmpeg=Path(ffmpeg_text).resolve() if ffmpeg_text else None,
         )
 
+    def _current_settings(self) -> GuiSettings:
+        return GuiSettings(
+            scan_path=self.scan_path.get().strip(),
+            device=self.device.get(),
+            accelerator=self.accelerator.get(),
+            ffmpeg=self.ffmpeg.get().strip(),
+            hash_videos=self.hash_videos.get(),
+        )
+
+    def _on_settings_changed(self, *_args: Any) -> None:
+        if self._save_after_id is not None:
+            self.after_cancel(self._save_after_id)
+        self._save_after_id = self.after(400, self._save_settings)
+
+    def _save_settings(self) -> None:
+        self._save_after_id = None
+        try:
+            save_gui_settings(self.paths.data_root, self._current_settings())
+        except (OSError, SettingsError) as exc:
+            messagebox.showwarning(
+                "无法保存设置", str(exc), parent=self.master
+            )
+
+    def _flush_settings(self) -> None:
+        if self._save_after_id is not None:
+            self.after_cancel(self._save_after_id)
+            self._save_after_id = None
+        try:
+            save_gui_settings(self.paths.data_root, self._current_settings())
+        except (OSError, SettingsError):
+            pass
+
     def _selected_root(self) -> Path:
         value = self.scan_path.get().strip().strip('"')
         if not value:
@@ -482,14 +546,21 @@ class CCCoverApp(ttk.Frame):
         self.busy = busy
         state = "disabled" if busy else "normal"
         for widget in (
+            self.accelerator_gpu_radio,
+            self.accelerator_cpu_radio,
             self.setup_button,
             self.data_root_button,
+            self.path_entry,
             self.choose_button,
             self.scan_button,
+            self.hash_check,
+            self.ffmpeg_entry,
+            self.ffmpeg_button,
             self.start_button,
             self.resume_button,
         ):
             widget.configure(state=state)
+        self.device_combo.configure(state="disabled" if busy else "readonly")
         self.cancel_button.configure(state="normal" if busy else "disabled")
         if busy:
             self.progress.start(10)
@@ -603,6 +674,7 @@ class CCCoverApp(ttk.Frame):
     def change_data_root(self) -> None:
         if self.busy:
             return
+        self._flush_settings()
         confirmed = messagebox.askyesno(
             "更改数据根",
             "更改数据根后：\n\n"
@@ -1232,6 +1304,7 @@ class CCCoverApp(ttk.Frame):
             if not close:
                 return
             self.cancel_task()
+        self._flush_settings()
         self.master.destroy()
 
 

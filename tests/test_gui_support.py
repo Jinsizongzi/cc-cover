@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from cc_cover.cli import create_parser
 from cc_cover.gui_support import (
+    GuiSettings,
     GuiOptions,
     SettingsError,
     apply_data_root,
@@ -19,12 +20,14 @@ from cc_cover.gui_support import (
     environment_check_command,
     environment_status_label,
     is_writable,
+    load_gui_settings,
     read_settings,
     resolve_data_root,
     runtime_paths,
     scan_command,
     setup_commands,
     settings_file,
+    save_gui_settings,
     transcribe_command,
     write_settings,
 )
@@ -416,6 +419,122 @@ class DataRootSwitchTests(unittest.TestCase):
                 resolution = resolve_data_root(default)
             self.assertEqual(resolution.root, new_root.resolve())
             self.assertFalse(resolution.needs_choice)
+
+
+class GuiPreferencesTests(unittest.TestCase):
+    def test_load_returns_defaults_for_missing_settings_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            settings = load_gui_settings(Path(temporary))
+
+        self.assertEqual(
+            settings,
+            GuiSettings(
+                scan_path="",
+                device="auto",
+                accelerator="cuda",
+                ffmpeg="",
+                hash_videos=True,
+            ),
+        )
+
+    def test_save_then_load_round_trips_user_preferences(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected = GuiSettings(
+                scan_path="D:/视频",
+                device="cpu",
+                accelerator="cpu",
+                ffmpeg="C:/ffmpeg.exe",
+                hash_videos=False,
+            )
+
+            save_gui_settings(root, expected)
+            loaded = load_gui_settings(root)
+
+            self.assertEqual(loaded, expected)
+            self.assertIn(
+                "D:/视频", settings_file(root).read_text(encoding="utf-8")
+            )
+
+    def test_load_fills_defaults_for_missing_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_settings(root, {"device": "cpu", "unknown": "ignored"})
+
+            settings = load_gui_settings(root)
+
+        self.assertEqual(
+            settings,
+            GuiSettings(
+                scan_path="",
+                device="cpu",
+                accelerator="cuda",
+                ffmpeg="",
+                hash_videos=True,
+            ),
+        )
+
+    def test_load_falls_back_to_defaults_for_invalid_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_settings(
+                root,
+                {
+                    "scan_path": None,
+                    "device": "tpu",
+                    "accelerator": "gpu",
+                    "ffmpeg": None,
+                    "hash_videos": "yes",
+                },
+            )
+
+            settings = load_gui_settings(root)
+
+        self.assertEqual(
+            settings,
+            GuiSettings(
+                scan_path="",
+                device="auto",
+                accelerator="cuda",
+                ffmpeg="",
+                hash_videos=True,
+            ),
+        )
+
+    def test_save_preserves_existing_settings_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_settings(root, {"data_root": "D:/data"})
+
+            save_gui_settings(
+                root,
+                GuiSettings(
+                    scan_path="C:/videos",
+                    device="cuda",
+                    accelerator="cuda",
+                    ffmpeg="",
+                    hash_videos=True,
+                ),
+            )
+
+            stored = read_settings(root)
+        self.assertEqual(stored["data_root"], "D:/data")
+        self.assertEqual(stored["scan_path"], "C:/videos")
+        self.assertEqual(stored["device"], "cuda")
+
+    def test_load_rejects_invalid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings_file(root).write_text("{not json", encoding="utf-8")
+            with self.assertRaises(SettingsError):
+                load_gui_settings(root)
+
+    def test_save_rejects_invalid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings_file(root).write_text("[1, 2]", encoding="utf-8")
+            with self.assertRaises(SettingsError):
+                save_gui_settings(root, GuiSettings())
 
 
 if __name__ == "__main__":
