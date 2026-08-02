@@ -59,6 +59,28 @@ class GuiSupportTests(unittest.TestCase):
         self.assertIn("--device", transcribe)
         self.assertIn("--ffmpeg", transcribe)
 
+    def test_transcribe_without_hash_protection_passes_no_hash_videos(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True,
+                bundle_root=base / "bundle",
+                local_app_data=base / "local",
+            )
+            selected = base / "selected"
+            options = GuiOptions(
+                device="cpu",
+                hash_videos=False,
+                ffmpeg=base / "ffmpeg.exe",
+            )
+            scan = scan_command(paths, selected, options)
+            transcribe = transcribe_command(paths, selected, options)
+
+        self.assertIn("--no-hash-videos", scan)
+        self.assertIn("--no-hash-videos", transcribe)
+
     def test_setup_commands_select_requested_torch_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
