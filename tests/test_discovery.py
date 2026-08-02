@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 
 from cc_cover.discovery import VIDEO_EXTENSIONS, discover
@@ -148,6 +149,44 @@ class DiscoverySemanticsTests(unittest.TestCase):
         candidate = report.candidates[0]
         self.assertEqual(candidate.video_path, (subdir / "clip.mp4").resolve())
         self.assertEqual(candidate.root, root.resolve())
+
+
+class DiscoveryProbeTests(unittest.TestCase):
+    def _wav_media(self, root: Path, name: str) -> Path:
+        path = root / name
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(b"\x00\x00" * 16000)
+        return path
+
+    def test_discover_probes_duration_and_size_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            media = self._wav_media(root, "clip.mp4")
+            expected_size = media.stat().st_size
+            (root / "clip.txt").write_bytes(b"")
+            (root / "broken.mp4").write_bytes(b"not a media file")
+            (root / "broken.txt").write_bytes(b"")
+
+            report = discover([root], hash_videos=False, probe_durations=True)
+
+        by_name = {item.video_path.name: item for item in report.candidates}
+        self.assertAlmostEqual(by_name["clip.mp4"].video_duration_s, 1.0, delta=0.15)
+        self.assertEqual(by_name["clip.mp4"].video_fingerprint.size, expected_size)
+        self.assertIsNone(by_name["broken.mp4"].video_duration_s)
+
+    def test_discover_without_probe_keeps_duration_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._wav_media(root, "clip.mp4")
+            (root / "clip.txt").write_bytes(b"")
+
+            report = discover([root], hash_videos=False)
+
+        self.assertEqual(len(report.candidates), 1)
+        self.assertIsNone(report.candidates[0].video_duration_s)
 
 
 if __name__ == "__main__":

@@ -565,7 +565,12 @@ class SubtitlePipeline:
         self.hotwords = load_hotwords(options, self.candidates)
 
     @classmethod
-    def create(cls, options: PipelineOptions, report: DiscoveryReport) -> "SubtitlePipeline":
+    def create(
+        cls,
+        options: PipelineOptions,
+        report: DiscoveryReport,
+        excluded_videos: Sequence[Path] | None = None,
+    ) -> "SubtitlePipeline":
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{os.getpid()}"
         if not SAFE_RUN_ID.fullmatch(run_id):
             raise PipelineError(f"生成的 run_id 不安全：{run_id}")
@@ -599,6 +604,9 @@ class SubtitlePipeline:
             },
             "candidates": [item.to_dict() for item in report.candidates],
             "protected_nonempty_txt": [item.to_dict() for item in report.protected_texts],
+            "excluded_videos": sorted(
+                {str(path.expanduser().resolve()) for path in (excluded_videos or ())}
+            ),
             "runtime": None,
             "stage": None,
             "commit": None,
@@ -1097,4 +1105,9 @@ class SubtitlePipeline:
 
 
 def discover_for_options(options: PipelineOptions) -> DiscoveryReport:
-    return discover(options.roots, hash_videos=options.hash_videos)
+    return discover(
+        options.roots,
+        hash_videos=options.hash_videos,
+        probe_durations=True,
+        ffmpeg=options.ffmpeg,
+    )

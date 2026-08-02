@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 
-from cc_cover.engines import FasterWhisperEngine
+from cc_cover.engines import (
+    FasterWhisperEngine,
+    parse_ffmpeg_duration,
+    probe_duration,
+)
 from cc_cover.models import PipelineOptions
 
 
@@ -121,6 +127,46 @@ class FasterWhisperEngineTests(unittest.TestCase):
         self.assertEqual(segments[0].metadata["avg_logprob"], -0.5)
         self.assertEqual(segments[0].metadata["no_speech_prob"], 0.01)
         self.assertEqual(segments[0].metadata["compression_ratio"], 1.0)
+
+
+class DurationProbeTests(unittest.TestCase):
+    def test_parse_ffmpeg_duration_reads_common_formats(self) -> None:
+        self.assertAlmostEqual(
+            parse_ffmpeg_duration("  Duration: 00:01:23.45, start: 0.0"),
+            83.45,
+        )
+        self.assertAlmostEqual(
+            parse_ffmpeg_duration("Duration: 01:02:03, bitrate: 1 kb/s"),
+            3723.0,
+        )
+        self.assertIsNone(parse_ffmpeg_duration("Duration: N/A"))
+        self.assertIsNone(parse_ffmpeg_duration(""))
+        self.assertIsNone(parse_ffmpeg_duration("no duration here"))
+
+    def test_probe_duration_reads_real_media_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            media = root / "clip.wav"
+            with wave.open(str(media), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                handle.writeframes(b"\x00\x00" * 16000)
+
+            duration = probe_duration(media)
+
+        self.assertIsNotNone(duration)
+        self.assertAlmostEqual(duration, 1.0, delta=0.15)
+
+    def test_probe_duration_returns_none_for_unreadable_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            broken = root / "broken.mp4"
+            broken.write_bytes(b"not a media file")
+
+            duration = probe_duration(broken)
+
+        self.assertIsNone(duration)
 
 
 if __name__ == "__main__":

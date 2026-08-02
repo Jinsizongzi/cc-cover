@@ -66,6 +66,7 @@ class Candidate:
     initial_state: str
     video_fingerprint: Fingerprint
     target_fingerprint: Fingerprint
+    video_duration_s: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +77,7 @@ class Candidate:
             "initial_state": self.initial_state,
             "video_fingerprint": self.video_fingerprint.to_dict(),
             "target_fingerprint": self.target_fingerprint.to_dict(),
+            "video_duration_s": self.video_duration_s,
         }
 
     @classmethod
@@ -88,6 +90,11 @@ class Candidate:
             initial_state=str(value["initial_state"]),
             video_fingerprint=Fingerprint.from_dict(value["video_fingerprint"]),
             target_fingerprint=Fingerprint.from_dict(value["target_fingerprint"]),
+            video_duration_s=(
+                None
+                if value.get("video_duration_s") is None
+                else float(value["video_duration_s"])
+            ),
         )
 
 
