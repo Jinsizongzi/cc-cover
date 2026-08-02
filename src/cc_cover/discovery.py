@@ -53,7 +53,22 @@ def fingerprint(path: Path, include_hash: bool = True) -> Fingerprint:
 
 
 def fingerprints_match(actual: Fingerprint, expected: Fingerprint) -> bool:
-    return actual == expected
+    if not fingerprints_match_quick(actual, expected):
+        return False
+    if expected.sha256 is None:
+        # 基线无 hash（视频哈希保护关闭）：只按存在性 + 大小 + mtime 匹配。
+        return True
+    # 基线有 hash：必须做全量复核，快速指纹（sha256=None）不算匹配。
+    return actual.sha256 is not None and actual.sha256 == expected.sha256
+
+
+def fingerprints_match_quick(actual: Fingerprint, expected: Fingerprint) -> bool:
+    """快速校验：只比较存在性、大小与修改时间，不比较哈希。"""
+    return (
+        actual.exists == expected.exists
+        and actual.size == expected.size
+        and actual.mtime_ns == expected.mtime_ns
+    )
 
 
 def normalize_roots(roots: Iterable[Path]) -> list[Path]:

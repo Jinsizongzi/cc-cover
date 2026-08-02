@@ -37,12 +37,14 @@ class PipelineHelperTests(unittest.TestCase):
                 runs_root=root / "runs",
                 model_cache=root / "models",
                 include_whitespace_only=True,
+                hash_videos=False,
             )
             restored = options_from_dict(options_to_dict(options))
 
         self.assertEqual(restored.roots, options.roots)
         self.assertEqual(restored.runs_root, options.runs_root)
         self.assertTrue(restored.include_whitespace_only)
+        self.assertFalse(restored.hash_videos)
 
     def test_existing_model_caches_resolve_to_local_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -19,6 +19,7 @@ from cc_cover.discovery import (
     discover,
     fingerprint,
     fingerprints_match,
+    fingerprints_match_quick,
 )
 from cc_cover.engines import (
     FasterWhisperEngine,
@@ -330,11 +331,8 @@ def validate_protected(protected: Sequence[ProtectedText]) -> None:
 def validate_candidates(candidates: Sequence[Candidate], require_initial_target: bool) -> None:
     failures: list[str] = []
     for candidate in candidates:
-        current_video = fingerprint(
-            candidate.video_path,
-            include_hash=candidate.video_fingerprint.sha256 is not None,
-        )
-        if not fingerprints_match(current_video, candidate.video_fingerprint):
+        current_video = fingerprint(candidate.video_path, include_hash=False)
+        if not fingerprints_match_quick(current_video, candidate.video_fingerprint):
             failures.append(f"视频变化：{candidate.video_path}")
         if require_initial_target:
             current_target = fingerprint(candidate.target_path, include_hash=True)
@@ -476,11 +474,8 @@ class SubtitlePipeline:
                     f"[{engine_name} {index}/{len(pending)}] {candidate.video_path}",
                     flush=True,
                 )
-                before = fingerprint(
-                    candidate.video_path,
-                    include_hash=candidate.video_fingerprint.sha256 is not None,
-                )
-                if not fingerprints_match(before, candidate.video_fingerprint):
+                before = fingerprint(candidate.video_path, include_hash=False)
+                if not fingerprints_match_quick(before, candidate.video_fingerprint):
                     raise PipelineError(f"视频在转写前发生变化：{candidate.video_path}")
                 wav_path = self.run_dir / "work" / f"{candidate.sample_id}.wav"
                 started = time.perf_counter()
@@ -492,11 +487,8 @@ class SubtitlePipeline:
                 finally:
                     if wav_path.exists():
                         wav_path.unlink()
-                after = fingerprint(
-                    candidate.video_path,
-                    include_hash=candidate.video_fingerprint.sha256 is not None,
-                )
-                if not fingerprints_match(after, candidate.video_fingerprint):
+                after = fingerprint(candidate.video_path, include_hash=False)
+                if not fingerprints_match_quick(after, candidate.video_fingerprint):
                     raise PipelineError(f"视频在转写后发生变化：{candidate.video_path}")
                 validate_segments(
                     segments,
@@ -695,6 +687,15 @@ class SubtitlePipeline:
                     "fingerprint": candidate.target_fingerprint.to_dict(),
                 },
             )
+        # 写回前全量复核：视频哈希保护开启时做第 2 次（也是最后一次）全量读；
+        # 关闭时只做快速校验。
+        for candidate in self.candidates:
+            current_video = fingerprint(
+                candidate.video_path,
+                include_hash=candidate.video_fingerprint.sha256 is not None,
+            )
+            if not fingerprints_match(current_video, candidate.video_fingerprint):
+                raise PipelineError(f"写回前视频已变化：{candidate.video_path}")
         committed: list[Candidate] = []
         try:
             for candidate in self.candidates:
@@ -744,11 +745,8 @@ class SubtitlePipeline:
         failures: list[str] = []
         entries: list[dict[str, Any]] = []
         for candidate in self.candidates:
-            current_video = fingerprint(
-                candidate.video_path,
-                include_hash=candidate.video_fingerprint.sha256 is not None,
-            )
-            if not fingerprints_match(current_video, candidate.video_fingerprint):
+            current_video = fingerprint(candidate.video_path, include_hash=False)
+            if not fingerprints_match_quick(current_video, candidate.video_fingerprint):
                 failures.append(f"视频变化：{candidate.video_path}")
                 continue
             prepared = self.run_dir / "prepared" / f"{candidate.sample_id}.txt"
