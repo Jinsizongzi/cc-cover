@@ -81,8 +81,8 @@ class RunStatusLabelTests(unittest.TestCase):
     def test_maps_known_statuses_to_chinese_labels(self) -> None:
         self.assertEqual(run_status_label("prepared"), "已准备")
         self.assertEqual(run_status_label("running"), "运行中")
-        self.assertEqual(run_status_label("staged_all"), "已暂存（全部通过）")
-        self.assertEqual(run_status_label("staged_partial"), "已暂存（部分通过）")
+        self.assertEqual(run_status_label("staged_all"), "已暂存（全部候选）")
+        self.assertEqual(run_status_label("staged_partial"), "已暂存（部分候选）")
         self.assertEqual(run_status_label("committed"), "已完成")
 
     def test_unknown_status_passes_through(self) -> None:
@@ -144,7 +144,7 @@ class BuildSummaryTextTests(unittest.TestCase):
 
             text = build_summary_text(run_dir)
 
-        self.assertIn("状态：已暂存（部分通过）（staged_partial）", text)
+        self.assertIn("状态：已暂存（部分候选）（staged_partial）", text)
         self.assertIn("质量门禁通过：0", text)
         self.assertIn("质量门禁失败：1", text)
         self.assertIn("写回成功：0", text)
@@ -186,6 +186,56 @@ class BuildSummaryTextTests(unittest.TestCase):
 
         self.assertIn("状态：已准备（prepared）", text)
         self.assertIn("已排除：2（本次不处理）", text)
+
+    def test_stopped_run_still_yields_coherent_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / "20260802_230000_5"
+            run_dir.mkdir()
+            write_json_atomic(
+                run_dir / "manifest.json",
+                {
+                    "run_id": "20260802_230000_5",
+                    "status": "running",
+                    "created_at_utc": "2026-08-02T23:00:00+00:00",
+                    "updated_at_utc": "2026-08-02T23:04:00+00:00",
+                    "candidates": [{"sample_id": "CC-CANDIDATE-00001"}],
+                },
+            )
+
+            text = build_summary_text(run_dir)
+
+        self.assertIn("状态：运行中（running）", text)
+        self.assertIn("质量门禁通过：0", text)
+        self.assertIn("（未写回）", text)
+
+    def test_failed_final_review_lists_verify_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = committed_run_fixture(Path(temporary))
+            write_json_atomic(
+                run_dir / "verification.json",
+                {
+                    "passed": False,
+                    "verified_count": 1,
+                    "failures": ["视频变化：E:\\videos\\ok.mp4"],
+                },
+            )
+
+            text = build_summary_text(run_dir)
+
+        self.assertIn("最终复核：失败（1 项）", text)
+        self.assertIn("- 视频变化：E:\\videos\\ok.mp4", text)
+
+    def test_passed_final_review_reports_verified_count(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = committed_run_fixture(Path(temporary))
+            write_json_atomic(
+                run_dir / "verification.json",
+                {"passed": True, "verified_count": 2, "failures": []},
+            )
+
+            text = build_summary_text(run_dir)
+
+        self.assertIn("最终复核：2 项通过", text)
 
 
 class WriteSummaryTests(unittest.TestCase):
@@ -303,9 +353,11 @@ class ExecuteWritesSummaryTests(unittest.TestCase):
             summary = pipeline.run_dir / "summary.txt"
             self.assertTrue(summary.is_file())
             text = summary.read_text(encoding="utf-8")
+            self.assertIn("状态：已暂存（全部候选）（staged_all）", text)
             self.assertIn("质量门禁通过：0", text)
             self.assertIn("质量门禁失败：1", text)
             self.assertIn("（未写回）", text)
+            self.assertNotIn("全部通过", text)
 
 
 if __name__ == "__main__":

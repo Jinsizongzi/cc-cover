@@ -143,8 +143,8 @@ SUMMARY_FILENAME = "summary.txt"
 RUN_STATUS_LABELS = {
     "prepared": "已准备",
     "running": "运行中",
-    "staged_all": "已暂存（全部通过）",
-    "staged_partial": "已暂存（部分通过）",
+    "staged_all": "已暂存（全部候选）",
+    "staged_partial": "已暂存（部分候选）",
     "committed": "已完成",
     "unknown": "未知",
 }
@@ -175,6 +175,7 @@ def build_summary_text(run_dir: Path) -> str:
     manifest = load_optional_json(run_dir / "manifest.json") or {}
     stage = load_optional_json(run_dir / "stage_report.json")
     commit = load_optional_json(run_dir / "commit_report.json")
+    verification = load_optional_json(run_dir / "verification.json")
 
     run_id = str(manifest.get("run_id") or run_dir.name)
     status = str(manifest.get("status") or "unknown")
@@ -202,6 +203,10 @@ def build_summary_text(run_dir: Path) -> str:
     entries = (commit.get("entries") or []) if commit else []
     committed_count = len(entries) if isinstance(entries, list) else 0
 
+    verify_failures: list[str] = []
+    if verification is not None and not bool(verification.get("passed", True)):
+        verify_failures = [str(item) for item in verification.get("failures") or []]
+
     lines = [
         "CC-Cover 运行摘要",
         "================",
@@ -220,6 +225,13 @@ def build_summary_text(run_dir: Path) -> str:
         f"写回成功：{committed_count}",
         f"告警：{len(warning_samples)} 个视频，共 {warning_count} 条",
     ]
+    if verification is not None:
+        if verify_failures:
+            lines.append(f"最终复核：失败（{len(verify_failures)} 项）")
+        else:
+            lines.append(
+                f"最终复核：{int(verification.get('verified_count') or 0)} 项通过"
+            )
 
     lines += ["", "告警明细", "--------"]
     if warning_samples:
@@ -230,10 +242,13 @@ def build_summary_text(run_dir: Path) -> str:
         lines.append("（无）")
 
     lines += ["", "失败明细", "--------"]
-    if failed_samples:
-        for sample in failed_samples:
-            lines.append(_sample_line(sample))
-            lines.extend(f"  - {error}" for error in sample.get("errors") or [])
+    failure_lines: list[str] = []
+    for sample in failed_samples:
+        failure_lines.append(_sample_line(sample))
+        failure_lines.extend(f"  - {error}" for error in sample.get("errors") or [])
+    failure_lines.extend(f"  - {failure}" for failure in verify_failures)
+    if failure_lines:
+        lines.extend(failure_lines)
     else:
         lines.append("（无）")
 

@@ -53,7 +53,7 @@ from cc_cover.gui_support import (
     terminate_process_tree,
     transcribe_command,
 )
-from cc_cover.pipeline import run_status_label
+from cc_cover.pipeline import PipelineError, run_status_label, write_summary
 
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -1027,18 +1027,13 @@ class CCCoverApp(ttk.Frame):
                     )
                 )
             except TaskCancelled as exc:
-                self.events.put(
-                    (
-                        "cancelled",
-                        failure_info_from_command(
-                            chunks,
-                            exc,
-                            fallback_stage=(
-                                "扫描" if scanning else "转写与写回"
-                            ),
-                        ),
-                    )
+                info = failure_info_from_command(
+                    chunks,
+                    exc,
+                    fallback_stage=("扫描" if scanning else "转写与写回"),
                 )
+                self._best_effort_summary(info.run_dir)
+                self.events.put(("cancelled", info))
             except Exception as exc:
                 self.events.put(
                     (
@@ -1098,17 +1093,14 @@ class CCCoverApp(ttk.Frame):
                     )
                 )
             except TaskCancelled as exc:
-                self.events.put(
-                    (
-                        "cancelled",
-                        failure_info_from_command(
-                            chunks,
-                            exc,
-                            fallback_stage="继续中断任务",
-                            run_dir=run_dir,
-                        ),
-                    )
+                info = failure_info_from_command(
+                    chunks,
+                    exc,
+                    fallback_stage="继续中断任务",
+                    run_dir=run_dir,
                 )
+                self._best_effort_summary(info.run_dir)
+                self.events.put(("cancelled", info))
             except Exception as exc:
                 self.events.put(
                     (
@@ -1396,6 +1388,15 @@ class CCCoverApp(ttk.Frame):
     def _open_directory(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
         os.startfile(str(path))
+
+    def _best_effort_summary(self, run_dir: Path | None) -> None:
+        """任务被停止（子进程被终止，execute 的 finally 不会执行）时补写摘要。"""
+        if run_dir is None:
+            return
+        try:
+            write_summary(run_dir)
+        except (OSError, PipelineError):
+            pass
 
     def _show_failure_dialog(self, title: str, info: FailureInfo) -> None:
         dialog = self._result_dialog(title)
