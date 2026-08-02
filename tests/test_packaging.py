@@ -76,6 +76,22 @@ class PackagingTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(f'Name: "{{app}}\\{name}"', iss)
 
+    def test_iss_uses_vendored_chinese_language_file(self) -> None:
+        """中文语言文件随仓库自带，构建不依赖 Inno 安装是否带全语言包。"""
+        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'Name: "chinesesimplified"; MessagesFile: '
+            '"Languages\\ChineseSimplified.isl"',
+            iss,
+        )
+        isl = (
+            PROJECT_ROOT / "packaging" / "Languages" / "ChineseSimplified.isl"
+        )
+        self.assertTrue(isl.is_file(), "ChineseSimplified.isl 缺失")
+        self.assertGreater(isl.stat().st_size, 1000)
+
     def test_icon_is_valid_ico_with_multiple_sizes(self) -> None:
         """assets/app.ico 是合法 ICO，且包含常见的多尺寸条目。"""
         path = PROJECT_ROOT / "assets" / "app.ico"
