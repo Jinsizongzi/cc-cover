@@ -136,6 +136,21 @@ def failure_info(
     )
 
 
+def failure_info_from_command(
+    chunks: Sequence[str],
+    exc: BaseException,
+    *,
+    fallback_stage: str,
+    run_dir: Path | None = None,
+) -> FailureInfo:
+    """从已收集输出与命令异常构建失败对话框信息。"""
+    output = "".join(chunks)
+    message = str(exc).strip()
+    if message:
+        output = output.rstrip("\n") + "\n" + message
+    return failure_info(output, fallback_stage=fallback_stage, run_dir=run_dir)
+
+
 def first_failed_sample(run_dir: Path | None) -> tuple[str, str] | None:
     """质量门禁失败时，从运行目录读取第一个未通过的样例。"""
     if run_dir is None:

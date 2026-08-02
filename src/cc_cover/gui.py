@@ -20,7 +20,7 @@ from cc_cover.gui_support import (
     environment_check_command,
     environment_status_label,
     error_text,
-    failure_info,
+    failure_info_from_command,
     first_failed_sample,
     python_candidates,
     resume_command,
@@ -510,9 +510,13 @@ class CCCoverApp(ttk.Frame):
         self.process = None
         output = "".join(lines)
         if self.stop_triggered:
-            raise TaskCancelled("任务已由用户停止。运行产物可以稍后继续。")
+            raise TaskCancelled(
+                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
+            )
         if self.cancel_requested and return_code != 0:
-            raise TaskCancelled("任务已由用户停止。运行产物可以稍后继续。")
+            raise TaskCancelled(
+                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
+            )
         if return_code != 0:
             raise RuntimeError(output.strip() or f"命令执行失败：{return_code}")
         return output
@@ -540,13 +544,18 @@ class CCCoverApp(ttk.Frame):
             self.events.put(("log", line))
         return_code = process.wait()
         self.process = None
+        output = "".join(lines)
         if self.stop_triggered:
-            raise TaskCancelled("任务已由用户停止。运行产物可以稍后继续。")
+            raise TaskCancelled(
+                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
+            )
         if self.cancel_requested and return_code != 0:
-            raise TaskCancelled("任务已由用户停止。运行产物可以稍后继续。")
+            raise TaskCancelled(
+                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
+            )
         if return_code != 0:
-            raise RuntimeError(f"任务执行失败，退出代码：{return_code}")
-        return "".join(lines)
+            raise RuntimeError(output.strip() or f"任务执行失败，退出代码：{return_code}")
+        return output
 
     def _scan_report(self, root: Path, options: GuiOptions) -> dict[str, Any]:
         self.events.put(("status", "正在扫描目录…"))
@@ -590,7 +599,12 @@ class CCCoverApp(ttk.Frame):
                 )
             except TaskCancelled:
                 self.events.put(
-                    ("cancelled", failure_info("", fallback_stage="环境检查"))
+                    (
+                        "cancelled",
+                        failure_info_from_command(
+                            [], exc, fallback_stage="环境检查"
+                        ),
+                    )
                 )
                 return
             except Exception as exc:
@@ -678,8 +692,8 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(
                     (
                         "cancelled",
-                        failure_info(
-                            "".join(chunks), fallback_stage="安装运行环境"
+                        failure_info_from_command(
+                            chunks, exc, fallback_stage="安装运行环境"
                         ),
                     )
                 )
@@ -689,10 +703,10 @@ class CCCoverApp(ttk.Frame):
                         "error",
                         (
                             "环境安装失败",
-                            failure_info(
-                                "".join(chunks),
+                            failure_info_from_command(
+                                chunks,
+                                exc,
                                 fallback_stage="安装运行环境",
-                                reason=str(exc),
                             ),
                         ),
                     )
@@ -716,7 +730,12 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(("idle", "扫描完成"))
             except TaskCancelled:
                 self.events.put(
-                    ("cancelled", failure_info("", fallback_stage="扫描"))
+                    (
+                        "cancelled",
+                        failure_info_from_command(
+                            [], exc, fallback_stage="扫描"
+                        ),
+                    )
                 )
             except Exception as exc:
                 self.events.put(
@@ -724,8 +743,8 @@ class CCCoverApp(ttk.Frame):
                         "error",
                         (
                             "扫描失败",
-                            failure_info(
-                                "", fallback_stage="扫描", reason=str(exc)
+                            failure_info_from_command(
+                                [], exc, fallback_stage="扫描"
                             ),
                         ),
                     )
@@ -780,8 +799,9 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(
                     (
                         "cancelled",
-                        failure_info(
-                            "".join(chunks),
+                        failure_info_from_command(
+                            chunks,
+                            exc,
                             fallback_stage=(
                                 "扫描" if scanning else "转写与写回"
                             ),
@@ -794,10 +814,12 @@ class CCCoverApp(ttk.Frame):
                         "error",
                         (
                             "字幕补全失败",
-                            failure_info(
-                                "".join(chunks),
-                                fallback_stage="转写与写回",
-                                reason=str(exc),
+                            failure_info_from_command(
+                                chunks,
+                                exc,
+                                fallback_stage=(
+                                    "扫描" if scanning else "转写与写回"
+                                ),
                             ),
                         ),
                     )
@@ -848,8 +870,9 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(
                     (
                         "cancelled",
-                        failure_info(
-                            "".join(chunks),
+                        failure_info_from_command(
+                            chunks,
+                            exc,
                             fallback_stage="继续中断任务",
                             run_dir=run_dir,
                         ),
@@ -861,10 +884,10 @@ class CCCoverApp(ttk.Frame):
                         "error",
                         (
                             "继续任务失败",
-                            failure_info(
-                                "".join(chunks),
+                            failure_info_from_command(
+                                chunks,
+                                exc,
                                 fallback_stage="继续中断任务",
-                                reason=str(exc),
                                 run_dir=run_dir,
                             ),
                         ),
@@ -1131,9 +1154,14 @@ class CCCoverApp(ttk.Frame):
                 elif event == "cancelled":
                     info = payload
                     self._set_busy(False, "任务已停止")
-                    self._append_log(
-                        "任务已停止，产物已暂存，可点击「继续中断任务」恢复。\n"
-                    )
+                    if info.stage == "扫描":
+                        message = "扫描已停止，未展示扫描结果，可重新扫描。\n"
+                    else:
+                        message = (
+                            "任务已停止，产物已暂存，"
+                            "可点击「继续中断任务」恢复。\n"
+                        )
+                    self._append_log(message)
                     self._show_stopped_dialog(info)
                 elif event == "error":
                     title, info = payload

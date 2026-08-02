@@ -12,6 +12,7 @@ from cc_cover.gui_support import (
     FailureInfo,
     error_text,
     failure_info,
+    failure_info_from_command,
     first_failed_sample,
     run_is_resumable,
     terminate_process_tree,
@@ -19,6 +20,38 @@ from cc_cover.gui_support import (
 
 
 class FailureInfoTests(unittest.TestCase):
+    def test_command_failure_output_feeds_dialog_fields(self) -> None:
+        exc = RuntimeError(
+            "运行目录：C:\\runs\\20260802_010203_12345\n"
+            "[faster_whisper 44/66] E:\\videos\\47_skills实操.mp4\n"
+            "错误：引擎字幕段无效：#20 (engine=faster-whisper, "
+            "sample=CC-CANDIDATE-00047, video=E:\\videos\\47_skills实操.mp4, "
+            "duration_ms=600000, start_ms=12000, end_ms=11000)"
+        )
+
+        info = failure_info_from_command(
+            [], exc, fallback_stage="转写与写回"
+        )
+
+        self.assertEqual(info.stage, "faster-whisper 转写")
+        self.assertEqual(info.file, "E:\\videos\\47_skills实操.mp4")
+        self.assertEqual(
+            info.run_dir, Path("C:\\runs\\20260802_010203_12345")
+        )
+        self.assertEqual(info.done_count, 44)
+        self.assertEqual(info.total_count, 66)
+        self.assertIn("引擎字幕段无效", info.reason)
+
+    def test_command_failure_info_combines_chunks_with_exception(self) -> None:
+        info = failure_info_from_command(
+            ["运行目录：C:\\runs\\a\n"],
+            RuntimeError("错误：安装组件超时"),
+            fallback_stage="安装运行环境",
+        )
+
+        self.assertEqual(info.run_dir, Path("C:\\runs\\a"))
+        self.assertEqual(info.reason, "安装组件超时")
+
     def test_parses_run_dir_with_spaces_and_last_progress(self) -> None:
         output = (
             "运行目录：C:\\Users\\me\\AppData\\Local\\CC-Cover\\runs\\20260802_010203_12345\n"
