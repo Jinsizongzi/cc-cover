@@ -1707,9 +1707,9 @@ class CCCoverApp(ttk.Frame):
                 elif event == "progress_start":
                     self._start_progress(int(payload))
                 elif event == "confirm_start":
-                    candidate_count, excluded_count, confirm_event = payload
+                    candidate_count, excluded_count, result_queue = payload
                     self._show_confirm_start_dialog(
-                        candidate_count, excluded_count, confirm_event
+                        candidate_count, excluded_count, result_queue
                     )
                 elif event == "status":
                     self.status.set(str(payload))
