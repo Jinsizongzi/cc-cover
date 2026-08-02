@@ -386,7 +386,6 @@ class SubtitlePipeline:
                 "video_count": report.video_count,
                 "matched_text_count": report.matched_text_count,
                 "missing_text_count": report.missing_text_count,
-                "nonempty_format_samples": report.nonempty_format_samples,
                 "candidate_count": len(report.candidates),
                 "protected_nonempty_txt_count": len(report.protected_texts),
             },
@@ -521,10 +520,9 @@ class SubtitlePipeline:
         faster_segments: Sequence[Segment],
         duration_seconds: float,
     ) -> dict[str, Any]:
-        format_metrics = validate_rendered(caption_payload, candidate.profile)
+        format_metrics = validate_rendered(caption_payload)
         funasr_text = "".join(
-            normalize_text(item.text, candidate.profile.strip_sentence_punctuation)
-            for item in funasr_segments
+            normalize_text(item.text) for item in funasr_segments
         )
         faster_text = "".join(item.text for item in faster_segments)
         normalized_funasr = comparison_text(funasr_text)
@@ -550,10 +548,9 @@ class SubtitlePipeline:
             errors.append(f"连续重复字幕过多：{duplicate_run}")
         if not math.isfinite(length_ratio) or length_ratio < 0.45 or length_ratio > 2.20:
             errors.append(f"双模型全文长度比异常：{length_ratio:.3f}")
-        if candidate.profile.style == "timed":
-            median_chars = float(format_metrics["median_text_chars"])
-            if median_chars < 3 or median_chars > 40:
-                warnings.append(f"中位段长偏离常见范围：{median_chars:g} 字")
+        median_chars = float(format_metrics["median_text_chars"])
+        if median_chars < 3 or median_chars > 40:
+            warnings.append(f"中位段长偏离常见范围：{median_chars:g} 字")
         alignment = align_for_audit(funasr_segments, faster_segments)
         return {
             "sample_id": candidate.sample_id,
@@ -563,7 +560,14 @@ class SubtitlePipeline:
             "passed": not errors,
             "errors": errors,
             "warnings": warnings,
-            "profile": candidate.profile.to_dict(),
+            "output_format": {
+                "style": "timed",
+                "timestamp": "MM:SS / H:MM:SS",
+                "encoding": "utf-8",
+                "bom": False,
+                "newline_name": "crlf",
+                "terminal_newline": True,
+            },
             "format_metrics": format_metrics,
             "funasr_segment_count": len(funasr_segments),
             "faster_whisper_segment_count": len(faster_segments),
@@ -597,7 +601,7 @@ class SubtitlePipeline:
             duration = float(funasr_payload["duration_seconds"])
             if abs(duration - float(faster_payload["duration_seconds"])) > 0.05:
                 raise PipelineError(f"双模型音频时长不一致：{candidate.sample_id}")
-            caption_payload = render_segments(funasr_segments, candidate.profile)
+            caption_payload = render_segments(funasr_segments)
             report = self.quality_report(
                 candidate,
                 caption_payload,
@@ -671,7 +675,7 @@ class SubtitlePipeline:
         for candidate in self.candidates:
             prepared = self.run_dir / "prepared" / f"{candidate.sample_id}.txt"
             payload = prepared.read_bytes()
-            validate_rendered(payload, candidate.profile)
+            validate_rendered(payload)
             expected_hash = str(reports[candidate.sample_id]["caption_sha256"])
             if hashlib.sha256(payload).hexdigest() != expected_hash:
                 raise PipelineError(f"暂存字幕哈希不匹配：{prepared}")
@@ -705,7 +709,7 @@ class SubtitlePipeline:
                 actual = candidate.target_path.read_bytes()
                 if actual != payloads[candidate.sample_id]:
                     raise PipelineError(f"写回后内容不一致：{candidate.target_path}")
-                validate_rendered(actual, candidate.profile)
+                validate_rendered(actual)
             validate_protected(self.protected)
         except Exception:
             for candidate in reversed(committed):
@@ -757,7 +761,7 @@ class SubtitlePipeline:
             if actual != prepared.read_bytes():
                 failures.append(f"目标字幕与暂存产物不一致：{candidate.target_path}")
                 continue
-            metrics = validate_rendered(actual, candidate.profile)
+            metrics = validate_rendered(actual)
             entries.append(
                 {
                     "sample_id": candidate.sample_id,

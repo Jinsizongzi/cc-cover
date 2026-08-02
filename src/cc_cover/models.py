@@ -33,49 +33,6 @@ class Fingerprint:
 
 
 @dataclass(frozen=True)
-class FormatProfile:
-    encoding: str = "utf-8"
-    bom: bool = False
-    newline_name: str = "crlf"
-    style: str = "timed"
-    timestamp_style: str = "mmss"
-    terminal_newline: bool = True
-    strip_sentence_punctuation: bool = True
-    source_samples: tuple[str, ...] = ()
-
-    @property
-    def newline(self) -> str:
-        return "\r\n" if self.newline_name == "crlf" else "\n"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "encoding": self.encoding,
-            "bom": self.bom,
-            "newline_name": self.newline_name,
-            "style": self.style,
-            "timestamp_style": self.timestamp_style,
-            "terminal_newline": self.terminal_newline,
-            "strip_sentence_punctuation": self.strip_sentence_punctuation,
-            "source_samples": list(self.source_samples),
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "FormatProfile":
-        return cls(
-            encoding=str(value.get("encoding", "utf-8")),
-            bom=bool(value.get("bom", False)),
-            newline_name=str(value.get("newline_name", "crlf")),
-            style=str(value.get("style", "timed")),
-            timestamp_style=str(value.get("timestamp_style", "mmss")),
-            terminal_newline=bool(value.get("terminal_newline", True)),
-            strip_sentence_punctuation=bool(
-                value.get("strip_sentence_punctuation", True)
-            ),
-            source_samples=tuple(str(item) for item in value.get("source_samples", [])),
-        )
-
-
-@dataclass(frozen=True)
 class Segment:
     start_ms: int
     end_ms: int
@@ -109,7 +66,6 @@ class Candidate:
     initial_state: str
     video_fingerprint: Fingerprint
     target_fingerprint: Fingerprint
-    profile: FormatProfile
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,7 +76,6 @@ class Candidate:
             "initial_state": self.initial_state,
             "video_fingerprint": self.video_fingerprint.to_dict(),
             "target_fingerprint": self.target_fingerprint.to_dict(),
-            "profile": self.profile.to_dict(),
         }
 
     @classmethod
@@ -133,7 +88,6 @@ class Candidate:
             initial_state=str(value["initial_state"]),
             video_fingerprint=Fingerprint.from_dict(value["video_fingerprint"]),
             target_fingerprint=Fingerprint.from_dict(value["target_fingerprint"]),
-            profile=FormatProfile.from_dict(value["profile"]),
         )
 
 

@@ -1,6 +1,6 @@
 # CC-Cover
 
-CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选择需要扫描的视频文件夹，CC-Cover 会自动查找空字幕 TXT，使用 FunASR 与 faster-whisper 生成和审计字幕，匹配已有字幕格式，并在校验通过后直接替换空 TXT。
+CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选择需要扫描的视频文件夹，CC-Cover 会自动查找空字幕 TXT，使用 FunASR 与 faster-whisper 生成和审计字幕，按固定格式输出，并在校验通过后直接替换空 TXT。
 
 软件不预设任何扫描目录，不需要 PowerShell、CMD 或额外写回参数。
 
@@ -31,7 +31,7 @@ CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选�
 - 默认只处理与视频同名且字节大小严格为 0 的 TXT。
 - FunASR 负责中文正文与句级时间戳。
 - faster-whisper 负责第二模型对照和冲突审计。
-- 自动检测编码、BOM、换行、时间戳、空行及标点格式。
+- 字幕固定输出为 MM:SS / H:MM:SS 时间戳加字幕文字，段间空一行；UTF-8 无 BOM、CRLF 换行、末尾换行。
 - 通过质量与格式校验后自动原子替换目标 TXT。
 - 写回前备份，批量失败时自动回滚。
 - 记录视频与受保护字幕的文件快照，变化时拒绝写回。
@@ -70,4 +70,4 @@ CC-Cover 是一款 Windows 图形化字幕补全软件。用户在软件中选�
 
 ## 开发验证
 
-项目使用 Python `unittest` 覆盖扫描、格式匹配、安全写回辅助函数、GUI 命令构建和无默认路径契约。GitHub Actions 会运行单元测试，并在 Windows 环境构建 `CC-Cover.exe`。
+项目使用 Python `unittest` 覆盖扫描、固定格式渲染与校验、安全写回辅助函数、GUI 命令构建和无默认路径契约。GitHub Actions 会运行单元测试，并在 Windows 环境构建 `CC-Cover.exe`。

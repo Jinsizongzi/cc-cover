@@ -27,7 +27,6 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(len(report.candidates), 1)
         self.assertEqual(report.candidates[0].target_path.name, "empty.txt")
         self.assertEqual(report.candidates[0].initial_state, "zero_byte")
-        self.assertEqual(report.candidates[0].profile.style, "timed")
         self.assertEqual(len(report.protected_texts), 2)
 
     def test_missing_and_whitespace_are_opt_in(self) -> None:

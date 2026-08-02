@@ -46,8 +46,8 @@ FEATURE_TEXT = """核心功能
 2. 双模型字幕生成
 FunASR 负责中文正文和句级时间戳；faster-whisper 作为第二模型，对识别结果进行匹配、差异分析和风险审计。
 
-3. 自动匹配现有格式
-软件会分析扫描目录中的非空字幕样本，识别编码、BOM、换行方式、时间戳样式、段落空行和标点习惯，再按相同格式生成字幕。
+3. 固定输出格式
+字幕固定输出为 MM:SS / H:MM:SS 时间戳加字幕文字，段间空一行；UTF-8 无 BOM、CRLF 换行、末尾换行。
 
 4. 自动替换空字幕
 用户点击“开始补全并替换”后，软件完成扫描、识别、质量校验和格式校验，并直接原子替换目标空 TXT，无需额外写回参数。
@@ -776,8 +776,6 @@ class CCCoverApp(ttk.Frame):
             self.candidate_tree.delete(item)
         candidates = report.get("candidates", [])
         for candidate in candidates:
-            profile = candidate.get("format", {})
-            format_name = f"{profile.get('style', '?')} / {profile.get('timestamp_style', '?')}"
             self.candidate_tree.insert(
                 "",
                 "end",
@@ -785,7 +783,7 @@ class CCCoverApp(ttk.Frame):
                     candidate.get("state", ""),
                     candidate.get("video_path", ""),
                     candidate.get("target_path", ""),
-                    format_name,
+                    "MM:SS / H:MM:SS",
                 ),
             )
         self.summary.set(
