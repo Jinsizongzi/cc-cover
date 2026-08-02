@@ -668,6 +668,24 @@ def parsed_device(output: str) -> str | None:
     return None
 
 
+def nvidia_probe_command() -> list[str]:
+    """构造 NVIDIA 硬件探测命令：列出 GPU 名称；无 NVIDIA 驱动时失败。"""
+    return ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
+
+
+def device_probe_commands(paths: RuntimePaths) -> list[list[str]]:
+    """按优先级返回运行设备探测命令：先运行时 CUDA 探测，再 NVIDIA 硬件探测。"""
+    return [detect_device_command(paths), nvidia_probe_command()]
+
+
+def parsed_nvidia_probe(output: str) -> str | None:
+    """NVIDIA 硬件探测输出非空（存在 GPU）时视为 cuda。"""
+    for line in (output or "").splitlines():
+        if line.strip():
+            return "cuda"
+    return None
+
+
 def environment_status_label(accelerator: str, _check_output: str = "") -> str:
     if accelerator == "cuda":
         return "运行环境已就绪（GPU）"

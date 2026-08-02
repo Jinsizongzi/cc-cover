@@ -19,13 +19,16 @@ from cc_cover.gui_support import (
     configured_data_root,
     default_data_root,
     detect_device_command,
+    device_probe_commands,
     ensure_data_root,
     environment_check_command,
     environment_status_label,
     focus_existing_window,
     is_writable,
     load_gui_settings,
+    nvidia_probe_command,
     parsed_device,
+    parsed_nvidia_probe,
     read_settings,
     resolve_data_root,
     resolve_default_device,
@@ -624,6 +627,36 @@ class DeviceDetectionTests(unittest.TestCase):
     def test_parsed_device_rejects_unknown_output(self) -> None:
         self.assertIsNone(parsed_device(""))
         self.assertIsNone(parsed_device("无法检测"))
+
+    def test_nvidia_probe_command_queries_gpu_list(self) -> None:
+        command = nvidia_probe_command()
+
+        self.assertEqual(command[0], "nvidia-smi")
+        self.assertIn("--query-gpu=name", command[1:])
+        self.assertIn("--format=csv,noheader", command[1:])
+
+    def test_parsed_nvidia_probe_maps_gpu_names_to_cuda(self) -> None:
+        self.assertEqual(
+            parsed_nvidia_probe("NVIDIA GeForce RTX 4090\n"), "cuda"
+        )
+        self.assertEqual(parsed_nvidia_probe("  NVIDIA RTX A6000  \n"), "cuda")
+
+    def test_parsed_nvidia_probe_rejects_empty_output(self) -> None:
+        self.assertIsNone(parsed_nvidia_probe(""))
+        self.assertIsNone(parsed_nvidia_probe("\n"))
+
+    def test_device_probe_commands_prefer_runtime_then_hardware(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True,
+                bundle_root=base / "bundle",
+                data_root=base / "data",
+            )
+            commands = device_probe_commands(paths)
+
+        self.assertEqual(commands[0][0], str(paths.venv_python))
+        self.assertEqual(commands[1][0], "nvidia-smi")
 
 
 class SingleInstanceLockTests(unittest.TestCase):

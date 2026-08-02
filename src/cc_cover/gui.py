@@ -23,7 +23,7 @@ from cc_cover.gui_support import (
     apply_data_root,
     command_environment,
     default_data_root,
-    detect_device_command,
+    device_probe_commands,
     ensure_data_root,
     environment_check_command,
     environment_status_label,
@@ -33,6 +33,7 @@ from cc_cover.gui_support import (
     focus_existing_window,
     load_gui_settings,
     parsed_device,
+    parsed_nvidia_probe,
     python_candidates,
     resume_command,
     resolve_data_root,
@@ -777,6 +778,7 @@ class CCCoverApp(ttk.Frame):
             if not self.paths.venv_python.is_file():
                 self.events.put(("environment", (False, "尚未安装")))
                 self.events.put(("idle", "请先安装运行环境"))
+                self._detect_and_report()
                 return
             device = self.device.get()
             try:
@@ -802,10 +804,12 @@ class CCCoverApp(ttk.Frame):
                 )
                 self.events.put(("environment", (False, label)))
                 self.events.put(("log", f"环境检查失败：{detail}\n"))
+                self._detect_and_report()
                 if self._prompt_device_recheck:
                     self._prompt_device_recheck = False
                     self.events.put(("device_check_failed", label))
             else:
+                self._prompt_device_recheck = False
                 self.events.put(
                     (
                         "environment",
@@ -821,11 +825,15 @@ class CCCoverApp(ttk.Frame):
     def _detect_and_report(self) -> None:
         if not self.device_auto:
             return
-        try:
-            output = self._run_capture(detect_device_command(self.paths))
-        except Exception:
-            output = ""
-        detected = parsed_device(output)
+        detected: str | None = None
+        for command in device_probe_commands(self.paths):
+            try:
+                output = self._run_capture(command)
+            except Exception:
+                continue
+            detected = parsed_device(output) or parsed_nvidia_probe(output)
+            if detected is not None:
+                break
         self.events.put(("device_detected", detected or "cpu"))
 
     def _find_base_python(self) -> list[str]:
