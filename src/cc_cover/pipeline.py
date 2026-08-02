@@ -138,8 +138,6 @@ def options_to_dict(options: PipelineOptions) -> dict[str, Any]:
         "hotwords_file": (
             None if options.hotwords_file is None else str(options.hotwords_file)
         ),
-        "include_whitespace_only": options.include_whitespace_only,
-        "include_missing": options.include_missing,
         "hash_videos": options.hash_videos,
         "pilot_count": options.pilot_count,
     }
@@ -169,8 +167,6 @@ def options_from_dict(value: Mapping[str, Any]) -> PipelineOptions:
             if value.get("hotwords_file") in (None, "")
             else Path(str(value["hotwords_file"])).resolve()
         ),
-        include_whitespace_only=bool(value.get("include_whitespace_only", False)),
-        include_missing=bool(value.get("include_missing", False)),
         hash_videos=bool(value.get("hash_videos", True)),
         pilot_count=int(value.get("pilot_count", 2)),
     )
@@ -387,6 +383,7 @@ class SubtitlePipeline:
                 "matched_text_count": report.matched_text_count,
                 "missing_text_count": report.missing_text_count,
                 "candidate_count": len(report.candidates),
+                "conflict_count": len(report.conflicts),
                 "protected_nonempty_txt_count": len(report.protected_texts),
             },
             "phases": {
@@ -816,9 +813,4 @@ class SubtitlePipeline:
 
 
 def discover_for_options(options: PipelineOptions) -> DiscoveryReport:
-    return discover(
-        options.roots,
-        include_whitespace_only=options.include_whitespace_only,
-        include_missing=options.include_missing,
-        hash_videos=options.hash_videos,
-    )
+    return discover(options.roots, hash_videos=options.hash_videos)

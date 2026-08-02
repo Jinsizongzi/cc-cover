@@ -34,8 +34,6 @@ DEFAULTS: dict[str, Any] = {
     "funasr_punc_model": "ct-punc",
     "faster_whisper_model": "large-v3-turbo",
     "hotwords_file": None,
-    "include_whitespace_only": False,
-    "include_missing": False,
     "hash_videos": True,
     "pilot_count": 2,
 }
@@ -117,8 +115,6 @@ def build_options(
         funasr_punc_model=str(values["funasr_punc_model"]),
         faster_whisper_model=str(values["faster_whisper_model"]),
         hotwords_file=values["hotwords_file"],
-        include_whitespace_only=bool(values["include_whitespace_only"]),
-        include_missing=bool(values["include_missing"]),
         hash_videos=bool(values["hash_videos"]),
         pilot_count=int(values["pilot_count"]),
     )
@@ -131,6 +127,7 @@ def report_payload(report: DiscoveryReport) -> dict[str, Any]:
         "matched_text_count": report.matched_text_count,
         "missing_text_count": report.missing_text_count,
         "candidate_count": len(report.candidates),
+        "conflict_count": len(report.conflicts),
         "protected_nonempty_txt_count": len(report.protected_texts),
         "candidates": [
             {
@@ -141,6 +138,13 @@ def report_payload(report: DiscoveryReport) -> dict[str, Any]:
             }
             for item in report.candidates
         ],
+        "conflicts": [
+            {
+                "target_path": str(conflict.target_path),
+                "videos": [str(video) for video in conflict.videos],
+            }
+            for conflict in report.conflicts
+        ],
     }
 
 
@@ -149,26 +153,19 @@ def print_report(report: DiscoveryReport) -> None:
     print(f"同名 TXT：{report.matched_text_count}")
     print(f"缺失 TXT：{report.missing_text_count}")
     print(f"待补全字幕：{len(report.candidates)}")
+    print(f"冲突目标 TXT：{len(report.conflicts)}（默认不处理）")
     print(f"受保护非空 TXT：{len(report.protected_texts)}")
     for candidate in report.candidates:
         print(f"  [{candidate.sample_id}] {candidate.target_path} ({candidate.initial_state})")
+    for conflict in report.conflicts:
+        print(f"  [冲突] {conflict.target_path}")
+        for video in conflict.videos:
+            print(f"      {video}")
 
 
 def add_discovery_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("roots", nargs="+", help="递归扫描的视频目录，必须显式提供")
     parser.add_argument("--config", type=Path, help="JSON 配置文件")
-    parser.add_argument(
-        "--include-whitespace-only",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="同时处理只有空白字符的 TXT",
-    )
-    parser.add_argument(
-        "--include-missing",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="同时为没有同名 TXT 的视频创建字幕",
-    )
     parser.add_argument(
         "--hash-videos",
         action=argparse.BooleanOptionalAction,
@@ -236,7 +233,7 @@ def command_transcribe(arguments: argparse.Namespace) -> int:
     report = discover_for_options(options)
     print_report(report)
     if not report.candidates:
-        print("没有符合条件的空字幕 TXT，无需处理。")
+        print("没有可处理的候选视频（同 stem 冲突已排除），无需处理。")
         return 0
     pipeline = SubtitlePipeline.create(options, report)
     print(f"运行目录：{pipeline.run_dir}")

@@ -47,6 +47,40 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(payload["candidate_count"], 1)
 
+    def test_scan_json_lists_conflicts_and_excludes_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "episode.mp4").write_bytes(b"video")
+            (root / "episode.mkv").write_bytes(b"video")
+            (root / "episode.txt").write_bytes(b"")
+            (root / "standalone.mp4").write_bytes(b"video")
+            (root / "standalone.txt").write_bytes(b"")
+            output = StringIO()
+            with redirect_stdout(output):
+                result = main(["scan", str(root), "--json", "--no-hash-videos"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["video_count"], 3)
+        self.assertEqual(payload["conflict_count"], 1)
+        self.assertEqual(payload["candidate_count"], 1)
+        self.assertTrue(
+            payload["candidates"][0]["target_path"].endswith("standalone.txt")
+        )
+        self.assertTrue(
+            payload["conflicts"][0]["target_path"].endswith("episode.txt")
+        )
+        self.assertEqual(len(payload["conflicts"][0]["videos"]), 2)
+
+    def test_obsolete_scan_options_are_rejected(self) -> None:
+        parser = create_parser()
+        errors = StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            with redirect_stderr(errors), self.assertRaises(SystemExit):
+                parser.parse_args(["scan", temporary, "--include-missing"])
+            with redirect_stderr(errors), self.assertRaises(SystemExit):
+                parser.parse_args(["scan", temporary, "--include-whitespace-only"])
+
     def test_transcribe_requires_root_and_rejects_obsolete_write_flag(self) -> None:
         parser = create_parser()
         errors = StringIO()

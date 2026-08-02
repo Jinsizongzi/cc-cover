@@ -34,8 +34,6 @@ class RuntimePaths:
 @dataclass(frozen=True)
 class GuiOptions:
     device: str = "auto"
-    include_whitespace_only: bool = False
-    include_missing: bool = False
     hash_videos: bool = True
     ffmpeg: Path | None = None
 
@@ -89,10 +87,6 @@ def command_environment(
 
 def discovery_arguments(options: GuiOptions, *, preview: bool = False) -> list[str]:
     arguments: list[str] = []
-    if options.include_whitespace_only:
-        arguments.append("--include-whitespace-only")
-    if options.include_missing:
-        arguments.append("--include-missing")
     if preview or not options.hash_videos:
         arguments.append("--no-hash-videos")
     return arguments

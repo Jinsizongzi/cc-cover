@@ -4,50 +4,116 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cc_cover.discovery import discover
+from cc_cover.discovery import VIDEO_EXTENSIONS, discover
 
 
-class DiscoveryTests(unittest.TestCase):
-    def test_default_only_selects_zero_byte_txt(self) -> None:
+class VideoExtensionTests(unittest.TestCase):
+    def test_whitelist_covers_all_decision_extensions(self) -> None:
+        self.assertEqual(
+            VIDEO_EXTENSIONS,
+            frozenset(
+                {
+                    ".mp4",
+                    ".mkv",
+                    ".avi",
+                    ".mov",
+                    ".wmv",
+                    ".flv",
+                    ".webm",
+                    ".m4v",
+                    ".ts",
+                    ".m2ts",
+                    ".mts",
+                    ".ogv",
+                    ".mpg",
+                    ".mpeg",
+                    ".3gp",
+                    ".rmvb",
+                    ".rm",
+                    ".vob",
+                    ".asf",
+                    ".f4v",
+                    ".divx",
+                }
+            ),
+        )
+
+    def test_every_whitelisted_extension_is_scanned(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            for index, extension in enumerate(sorted(VIDEO_EXTENSIONS)):
+                (root / f"clip{index}{extension}").write_bytes(b"video")
+            report = discover([root], hash_videos=False)
+
+        self.assertEqual(report.video_count, len(VIDEO_EXTENSIONS))
+        self.assertEqual(len(report.candidates), len(VIDEO_EXTENSIONS))
+
+
+class DiscoverySemanticsTests(unittest.TestCase):
+    def test_all_videos_are_candidates_regardless_of_txt_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "missing.mp4").write_bytes(b"video")
             (root / "empty.mp4").write_bytes(b"video")
             (root / "empty.txt").write_bytes(b"")
+            (root / "spaces.mp4").write_bytes(b"video")
+            (root / "spaces.txt").write_bytes(b" \r\n\t")
             (root / "sample.mp4").write_bytes(b"video")
-            (root / "sample.txt").write_bytes(
-                "00:00\r\n格式\r\n\r\n00:02\r\n样本\r\n".encode("utf-8")
+            (root / "sample.txt").write_text(
+                "00:00\r\n格式\r\n\r\n00:02\r\n样本\r\n", encoding="utf-8"
             )
-            (root / "missing.mkv").write_bytes(b"video")
             (root / "notes.txt").write_text("不得修改", encoding="utf-8")
 
             report = discover([root], hash_videos=False)
 
-        self.assertEqual(report.video_count, 3)
-        self.assertEqual(report.missing_text_count, 1)
-        self.assertEqual(len(report.candidates), 1)
-        self.assertEqual(report.candidates[0].target_path.name, "empty.txt")
-        self.assertEqual(report.candidates[0].initial_state, "zero_byte")
-        self.assertEqual(len(report.protected_texts), 2)
+        self.assertEqual(report.video_count, 4)
+        self.assertEqual(len(report.candidates), 4)
+        self.assertEqual(
+            {item.target_path.name: item.initial_state for item in report.candidates},
+            {
+                "missing.txt": "missing",
+                "empty.txt": "zero_byte",
+                "spaces.txt": "whitespace_only",
+                "sample.txt": "nonempty",
+            },
+        )
+        self.assertEqual(len(report.protected_texts), 1)
+        self.assertEqual(report.protected_texts[0].path.name, "notes.txt")
 
-    def test_missing_and_whitespace_are_opt_in(self) -> None:
+    def test_same_stem_videos_are_conflicts_excluded_and_listed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "missing.mp4").write_bytes(b"video")
-            (root / "spaces.mp4").write_bytes(b"video")
-            (root / "spaces.txt").write_bytes(b" \r\n\t")
+            (root / "episode.mp4").write_bytes(b"video")
+            (root / "episode.mkv").write_bytes(b"video")
+            (root / "episode.txt").write_bytes(b"")
+            (root / "standalone.mp4").write_bytes(b"video")
+            (root / "standalone.txt").write_bytes(b"")
 
-            default_report = discover([root], hash_videos=False)
-            opt_in_report = discover(
-                [root],
-                include_missing=True,
-                include_whitespace_only=True,
-                hash_videos=False,
-            )
+            report = discover([root], hash_videos=False)
 
-        self.assertEqual(len(default_report.candidates), 0)
+        self.assertEqual(report.video_count, 3)
+        self.assertEqual(report.conflict_count, 1)
+        self.assertEqual(len(report.candidates), 1)
+        self.assertEqual(report.candidates[0].target_path.name, "standalone.txt")
+        conflict = report.conflicts[0]
+        self.assertEqual(conflict.target_path.name, "episode.txt")
         self.assertEqual(
-            {item.initial_state for item in opt_in_report.candidates},
-            {"missing", "whitespace_only"},
+            sorted(path.name for path in conflict.videos),
+            ["episode.mkv", "episode.mp4"],
+        )
+
+    def test_different_name_txt_is_never_a_candidate_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "lesson.mp4").write_bytes(b"video")
+            (root / "notes.txt").write_bytes(b"important")
+
+            report = discover([root], hash_videos=False)
+
+        self.assertEqual(len(report.candidates), 1)
+        self.assertEqual(report.candidates[0].target_path.name, "lesson.txt")
+        self.assertEqual(
+            [item.path.name for item in report.protected_texts], ["notes.txt"]
         )
 
 
