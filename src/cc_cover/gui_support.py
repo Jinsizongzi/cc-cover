@@ -72,18 +72,27 @@ class GuiOptions:
 
 
 DEVICE_CHOICES = ("auto", "cuda", "cpu")
-ACCELERATOR_CHOICES = ("cuda", "cpu")
+GUI_DEVICE_CHOICES = ("cuda", "cpu")
 
 
 @dataclass(frozen=True)
 class GuiSettings:
-    """GUI 用户偏好，持久化到数据根下的 settings.json。"""
+    """GUI 用户偏好，持久化到数据根下的 settings.json。
+
+    device 是唯一的运行设备设置；旧版 accelerator 键在读取时迁移。
+    """
 
     scan_path: str = ""
     device: str = "auto"
-    accelerator: str = "cuda"
     ffmpeg: str = ""
     hash_videos: bool = True
+
+
+def resolve_default_device(saved: str, detected: str | None) -> str:
+    """启动默认设备：已保存的明确选择优先；否则跟随检测结果，回退 CPU。"""
+    if saved in GUI_DEVICE_CHOICES:
+        return saved
+    return detected if detected in GUI_DEVICE_CHOICES else "cpu"
 
 
 RUN_DIR_PATTERN = re.compile(r"^运行目录：\s*(.+?)\s*$", re.MULTILINE)
@@ -362,27 +371,29 @@ def load_gui_settings(data_root: Path) -> GuiSettings:
     scan_path = values.get("scan_path")
     device = values.get("device")
     accelerator = values.get("accelerator")
+    if accelerator in GUI_DEVICE_CHOICES:
+        # 旧版 accelerator 是“运行环境”选择（NVIDIA GPU / CPU），合并后优先迁移。
+        device = accelerator
+    elif device not in DEVICE_CHOICES:
+        device = "auto"
     ffmpeg = values.get("ffmpeg")
     hash_videos = values.get("hash_videos")
     return GuiSettings(
         scan_path=str(scan_path) if isinstance(scan_path, str) else "",
-        device=device if device in DEVICE_CHOICES else "auto",
-        accelerator=(
-            accelerator if accelerator in ACCELERATOR_CHOICES else "cuda"
-        ),
+        device=device,
         ffmpeg=str(ffmpeg) if isinstance(ffmpeg, str) else "",
         hash_videos=hash_videos if isinstance(hash_videos, bool) else True,
     )
 
 
 def save_gui_settings(data_root: Path, settings: GuiSettings) -> None:
-    """合并写入 GUI 偏好，保留 data_root 等既有设置键。"""
+    """合并写入 GUI 偏好，移除旧版 accelerator 键，保留 data_root 等既有键。"""
     values = read_settings(data_root)
+    values.pop("accelerator", None)
     values.update(
         {
             "scan_path": settings.scan_path,
             "device": settings.device,
-            "accelerator": settings.accelerator,
             "ffmpeg": settings.ffmpeg,
             "hash_videos": settings.hash_videos,
         }
@@ -631,6 +642,48 @@ def environment_check_command(
             ")"
         ),
     ]
+
+
+def detect_device_command(paths: RuntimePaths) -> list[str]:
+    """构造检测可用运行设备的命令：CUDA 可用输出 cuda，否则输出 cpu。"""
+    return [
+        str(paths.venv_python),
+        "-c",
+        (
+            "import torch; "
+            "import ctranslate2; "
+            "ok = bool(torch.cuda.is_available()) and "
+            "int(ctranslate2.get_cuda_device_count()) > 0; "
+            "print('cuda' if ok else 'cpu')"
+        ),
+    ]
+
+
+def parsed_device(output: str) -> str | None:
+    """从检测命令输出解析运行设备；无法识别时返回 None。"""
+    for line in reversed((output or "").splitlines()):
+        value = line.strip()
+        if value in GUI_DEVICE_CHOICES:
+            return value
+    return None
+
+
+def nvidia_probe_command() -> list[str]:
+    """构造 NVIDIA 硬件探测命令：列出 GPU 名称；无 NVIDIA 驱动时失败。"""
+    return ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
+
+
+def device_probe_commands(paths: RuntimePaths) -> list[list[str]]:
+    """按优先级返回运行设备探测命令：先运行时 CUDA 探测，再 NVIDIA 硬件探测。"""
+    return [detect_device_command(paths), nvidia_probe_command()]
+
+
+def parsed_nvidia_probe(output: str) -> str | None:
+    """NVIDIA 硬件探测输出非空（存在 GPU）时视为 cuda。"""
+    for line in (output or "").splitlines():
+        if line.strip():
+            return "cuda"
+    return None
 
 
 def environment_status_label(accelerator: str, _check_output: str = "") -> str:
