@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-03
+
 ### 新增
 
 - 产品定位调整为「为视频生成同名 TXT」：所有视频默认都是候选，无论同名 TXT 是否存在、是否为空或已有内容，都会用 FunASR 与 faster-whisper 生成和审计字幕，校验通过后覆盖或创建同名 TXT；不再要求目标字幕匹配旧格式，不再提供「包含纯空白 TXT」「创建缺失 TXT」选项（#17、#21）。
@@ -52,6 +54,7 @@
 - 安全双模型字幕恢复：FunASR 负责中文正文与句级时间戳，faster-whisper 负责对照与冲突审计。
 - 通过质量与格式校验后原子写回目标 TXT，写回前备份，失败时回滚。
 
-[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Jinsizongzi/cc-cover/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Jinsizongzi/cc-cover/releases/tag/v0.3.0
