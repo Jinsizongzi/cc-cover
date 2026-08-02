@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from cc_cover import __version__
 from cc_cover.gui_support import (
+    CLEANUP_WARNING_BYTES,
     FailureInfo,
     GUI_DEVICE_CHOICES,
     GuiSettings,
@@ -23,6 +24,7 @@ from cc_cover.gui_support import (
     apply_data_root,
     command_environment,
     default_data_root,
+    delete_runs,
     device_probe_commands,
     ensure_data_root,
     environment_check_command,
@@ -31,6 +33,8 @@ from cc_cover.gui_support import (
     failure_info_from_command,
     first_failed_sample,
     focus_existing_window,
+    format_size,
+    list_runs,
     load_gui_settings,
     parsed_device,
     parsed_nvidia_probe,
@@ -38,7 +42,9 @@ from cc_cover.gui_support import (
     resume_command,
     resolve_data_root,
     resolve_default_device,
+    run_dir_from_output,
     run_is_resumable,
+    runs_total_size,
     runtime_paths,
     save_gui_settings,
     scan_command,
@@ -47,6 +53,7 @@ from cc_cover.gui_support import (
     terminate_process_tree,
     transcribe_command,
 )
+from cc_cover.pipeline import PipelineError, run_status_label, write_summary
 
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -111,14 +118,14 @@ GUIDE_TEXT = """操作指南
 3. 在候选列表中确认待补全字幕；冲突项会标记“冲突”，默认不会处理。
 4. 根据需要调整运行设备、视频哈希保护与 FFmpeg 路径。
 5. 点击“开始补全并替换”。软件将自动完成双模型识别、审计、格式化、备份、替换和最终复核。
-6. 在“运行日志”页查看实时进度。完成后可点击“打开运行目录”查看详细产物。
+6. 在“运行日志”页查看实时进度。完成后可点击“打开运行目录”查看详细产物；每次运行都会在运行目录生成 summary.txt 摘要（起止时间、统计、失败/告警明细与写回清单）。
 
 中断恢复
 
 1. 运行期间可随时点击“停止当前任务”（扫描、环境检查、转写、写回均支持）。
 2. 主动停止不会弹出错误框，而是提示“任务已停止，产物已暂存，可点击‘继续中断任务’恢复”。
 3. 失败或停止后可直接点击“继续中断任务”恢复，软件会复用已完成的模型结果，并在校验通过后继续写回。
-4. 也可以点击“打开运行目录”查看运行产物与日志。
+4. 也可以点击“打开运行目录”查看运行产物与日志；“运行目录清理”入口可查看所有运行记录（时间/状态/大小）并按需删除，总占用超过 5GB 时会提示建议清理。
 
 选项说明
 
@@ -444,6 +451,13 @@ class CCCoverApp(ttk.Frame):
             command=self.open_runs_directory,
         )
         self.open_runs_button.pack(side="left", padx=(8, 0))
+        self.cleanup_runs_button = ttk.Button(
+            action_panel,
+            text="运行目录清理",
+            style="Action.TButton",
+            command=self.cleanup_runs,
+        )
+        self.cleanup_runs_button.pack(side="left", padx=(8, 0))
         self.cancel_button = ttk.Button(
             action_panel,
             text="停止当前任务",
@@ -594,6 +608,7 @@ class CCCoverApp(ttk.Frame):
             self.ffmpeg_button,
             self.start_button,
             self.resume_button,
+            self.cleanup_runs_button,
         ):
             widget.configure(state=state)
         self.cancel_button.configure(state="normal" if busy else "disabled")
@@ -899,7 +914,7 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(
                     (
                         "done",
-                        ("安装完成", "运行环境安装并检查通过，可以开始扫描视频。"),
+                        ("安装完成", "运行环境安装并检查通过，可以开始扫描视频。", None),
                     )
                 )
             except TaskCancelled as exc:
@@ -987,7 +1002,7 @@ class CCCoverApp(ttk.Frame):
                     self.events.put(
                         (
                             "done",
-                            ("无需处理", "所选目录中没有符合条件的空字幕 TXT。"),
+                            ("无需处理", "所选目录中没有符合条件的空字幕 TXT。", None),
                         )
                     )
                     return
@@ -1000,28 +1015,25 @@ class CCCoverApp(ttk.Frame):
                         transcribe_command(self.paths, root, options)
                     )
                 )
+                run_dir = run_dir_from_output(chunks[-1])
                 self.events.put(
                     (
                         "done",
                         (
                             "字幕补全完成",
                             f"已完成 {count} 个字幕文件的生成、替换和复核。",
+                            run_dir,
                         ),
                     )
                 )
             except TaskCancelled as exc:
-                self.events.put(
-                    (
-                        "cancelled",
-                        failure_info_from_command(
-                            chunks,
-                            exc,
-                            fallback_stage=(
-                                "扫描" if scanning else "转写与写回"
-                            ),
-                        ),
-                    )
+                info = failure_info_from_command(
+                    chunks,
+                    exc,
+                    fallback_stage=("扫描" if scanning else "转写与写回"),
                 )
+                self._best_effort_summary(info.run_dir)
+                self.events.put(("cancelled", info))
             except Exception as exc:
                 self.events.put(
                     (
@@ -1077,21 +1089,18 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(
                     (
                         "done",
-                        ("任务已完成", "中断任务已继续执行并完成最终复核。"),
+                        ("任务已完成", "中断任务已继续执行并完成最终复核。", run_dir),
                     )
                 )
             except TaskCancelled as exc:
-                self.events.put(
-                    (
-                        "cancelled",
-                        failure_info_from_command(
-                            chunks,
-                            exc,
-                            fallback_stage="继续中断任务",
-                            run_dir=run_dir,
-                        ),
-                    )
+                info = failure_info_from_command(
+                    chunks,
+                    exc,
+                    fallback_stage="继续中断任务",
+                    run_dir=run_dir,
                 )
+                self._best_effort_summary(info.run_dir)
+                self.events.put(("cancelled", info))
             except Exception as exc:
                 self.events.put(
                     (
@@ -1123,6 +1132,140 @@ class CCCoverApp(ttk.Frame):
 
     def open_runs_directory(self) -> None:
         self._open_directory(self.paths.runs_root)
+
+    def cleanup_runs(self) -> None:
+        if self.busy:
+            return
+        runs = list_runs(self.paths.runs_root)
+        dialog = self._result_dialog("运行目录清理")
+        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(18, 14, 18, 6))
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text="勾选要删除的运行目录（本软件不会自动删除）：",
+            style="Section.TLabel",
+        ).pack(anchor="w", pady=(0, 8))
+        columns = ("check", "run_id", "time", "status", "size")
+        tree = ttk.Treeview(body, columns=columns, show="headings", height=12)
+        for column, text, width, stretch in (
+            ("check", "", 36, False),
+            ("run_id", "运行 ID", 190, False),
+            ("time", "时间", 150, False),
+            ("status", "状态", 150, False),
+            ("size", "大小", 80, False),
+        ):
+            tree.heading(column, text=text)
+            tree.column(
+                column,
+                width=width,
+                stretch=stretch,
+                anchor="center" if column == "check" else "w",
+            )
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="left", fill="y")
+
+        by_iid: dict[str, Any] = {}
+        for run in runs:
+            iid = tree.insert(
+                "",
+                "end",
+                values=(
+                    "☐",
+                    run.run_id,
+                    run.created_at_utc or "（无记录）",
+                    run_status_label(run.status),
+                    format_size(run.size_bytes),
+                ),
+                tags=("unchecked",),
+            )
+            by_iid[iid] = run
+
+        def update_delete_button() -> None:
+            selected = [
+                iid
+                for iid in tree.get_children()
+                if "checked" in tree.item(iid, "tags")
+            ]
+            delete_button.configure(state="normal" if selected else "disabled")
+
+        def toggle_row(_event: Any) -> None:
+            iid = tree.identify_row(_event.y)
+            if not iid:
+                return
+            values = list(tree.item(iid, "values"))
+            checked = values[0] == "☑"
+            values[0] = "☐" if checked else "☑"
+            tree.item(
+                iid,
+                values=values,
+                tags=("checked" if not checked else "unchecked",),
+            )
+            update_delete_button()
+
+        def confirm_delete() -> None:
+            selected = [
+                by_iid[iid]
+                for iid in tree.get_children()
+                if "checked" in tree.item(iid, "tags")
+            ]
+            if not selected:
+                return
+            total = format_size(sum(run.size_bytes for run in selected))
+            confirmed = messagebox.askyesno(
+                "确认删除",
+                f"将永久删除 {len(selected)} 个运行目录（共 {total}），不可恢复。\n\n"
+                "确定继续吗？",
+                parent=dialog,
+            )
+            if not confirmed:
+                return
+            try:
+                deleted = delete_runs(selected)
+            except OSError as exc:
+                messagebox.showerror(
+                    "删除失败",
+                    f"部分运行目录删除失败：\n{exc}",
+                    parent=dialog,
+                )
+                return
+            messagebox.showinfo(
+                "删除完成", f"已删除 {deleted} 个运行目录。", parent=dialog
+            )
+            dialog.destroy()
+
+        tree.bind("<Button-1>", toggle_row)
+
+        footer = ttk.Frame(dialog, style="Panel.TFrame", padding=(18, 10, 18, 18))
+        footer.pack(fill="x")
+        total_size = runs_total_size(runs)
+        ttk.Label(
+            footer,
+            text=f"总占用：{format_size(total_size)}",
+            style="Body.TLabel",
+        ).pack(side="left")
+        if total_size > CLEANUP_WARNING_BYTES:
+            ttk.Label(
+                footer,
+                text="⚠ 已超过 5GB，建议清理旧运行目录",
+                style="Body.TLabel",
+                foreground=WARNING,
+            ).pack(side="left", padx=(12, 0))
+        delete_button = ttk.Button(
+            footer,
+            text="删除所选",
+            style="Action.TButton",
+            command=confirm_delete,
+            state="disabled",
+        )
+        delete_button.pack(side="right")
+        ttk.Button(
+            footer,
+            text="关闭",
+            style="Action.TButton",
+            command=dialog.destroy,
+        ).pack(side="right", padx=(0, 8))
 
     def clear_log(self) -> None:
         self.log_text.configure(state="normal")
@@ -1246,6 +1389,15 @@ class CCCoverApp(ttk.Frame):
         path.mkdir(parents=True, exist_ok=True)
         os.startfile(str(path))
 
+    def _best_effort_summary(self, run_dir: Path | None) -> None:
+        """任务被停止（子进程被终止，execute 的 finally 不会执行）时补写摘要。"""
+        if run_dir is None:
+            return
+        try:
+            write_summary(run_dir)
+        except (OSError, PipelineError):
+            pass
+
     def _show_failure_dialog(self, title: str, info: FailureInfo) -> None:
         dialog = self._result_dialog(title)
         body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
@@ -1342,6 +1494,33 @@ class CCCoverApp(ttk.Frame):
             command=dialog.destroy,
         ).pack(side="right")
 
+    def _show_done_dialog(self, title: str, message: str, run_dir: Path | None) -> None:
+        dialog = self._result_dialog(title)
+        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
+        body.pack(fill="x")
+        ttk.Label(
+            body,
+            text=message,
+            style="Body.TLabel",
+            wraplength=500,
+            justify="left",
+        ).pack(anchor="w")
+        actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
+        actions.pack(fill="x")
+        if run_dir is not None:
+            ttk.Button(
+                actions,
+                text="打开运行目录",
+                style="Action.TButton",
+                command=lambda: self._open_directory(run_dir),
+            ).pack(side="left")
+        ttk.Button(
+            actions,
+            text="关闭",
+            style="Action.TButton",
+            command=dialog.destroy,
+        ).pack(side="right")
+
     def _poll_events(self) -> None:
         try:
             while True:
@@ -1382,9 +1561,9 @@ class CCCoverApp(ttk.Frame):
                 elif event == "idle":
                     self._set_busy(False, str(payload))
                 elif event == "done":
-                    title, message = payload
+                    title, message, run_dir = payload
                     self._set_busy(False, "就绪")
-                    messagebox.showinfo(title, message, parent=self.master)
+                    self._show_done_dialog(title, message, run_dir)
                 elif event == "cancelled":
                     info = payload
                     self._set_busy(False, "任务已停止")

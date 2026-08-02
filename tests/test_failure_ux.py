@@ -15,6 +15,7 @@ from cc_cover.gui_support import (
     failure_info,
     failure_info_from_command,
     first_failed_sample,
+    run_dir_from_output,
     run_is_resumable,
     stopped_message,
     terminate_process_tree,
@@ -202,6 +203,22 @@ class ResumeabilityTests(unittest.TestCase):
 
             manifest.write_text("broken", encoding="utf-8")
             self.assertFalse(run_is_resumable(run_dir))
+
+
+class RunDirFromOutputTests(unittest.TestCase):
+    def test_returns_last_run_dir_match(self) -> None:
+        output = (
+            "运行目录：C:\\runs\\a\n"
+            "[funasr 1/2] E:\\videos\\a.mp4\n"
+            "运行目录：C:\\runs\\b\n"
+            "字幕已写回并复核通过：C:\\runs\\b\n"
+        )
+
+        self.assertEqual(run_dir_from_output(output), Path("C:\\runs\\b"))
+
+    def test_returns_none_without_run_dir_line(self) -> None:
+        self.assertIsNone(run_dir_from_output("没有运行目录"))
+        self.assertIsNone(run_dir_from_output(""))
 
 
 class ErrorTextTests(unittest.TestCase):

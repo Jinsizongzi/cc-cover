@@ -6,6 +6,7 @@ import math
 import os
 import re
 import statistics
+import sys
 import time
 import unicodedata
 import uuid
@@ -100,6 +101,142 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise PipelineError(f"运行产物顶层必须是对象：{path}")
     return value
+
+
+SUMMARY_FILENAME = "summary.txt"
+
+RUN_STATUS_LABELS = {
+    "prepared": "已准备",
+    "running": "运行中",
+    "staged_all": "已暂存（全部候选）",
+    "staged_partial": "已暂存（部分候选）",
+    "committed": "已完成",
+    "unknown": "未知",
+}
+
+
+def run_status_label(status: str) -> str:
+    """运行状态的用户可读标签；未知状态原样透传。"""
+    return RUN_STATUS_LABELS.get(status, status)
+
+
+def load_optional_json(path: Path) -> dict[str, Any] | None:
+    """读取可选的运行产物 JSON；文件缺失或无效时返回 None。"""
+    try:
+        return load_json(path)
+    except (PipelineError, OSError):
+        return None
+
+
+def _sample_line(sample: dict[str, Any]) -> str:
+    return "{} {}".format(
+        sample.get("sample_id", ""), sample.get("video_path", "")
+    ).strip()
+
+
+def build_summary_text(run_dir: Path) -> str:
+    """从运行产物生成人读摘要文本；产物缺失时以 0 / 未知降级。"""
+    run_dir = run_dir.expanduser().resolve()
+    manifest = load_optional_json(run_dir / "manifest.json") or {}
+    stage = load_optional_json(run_dir / "stage_report.json")
+    commit = load_optional_json(run_dir / "commit_report.json")
+    verification = load_optional_json(run_dir / "verification.json")
+
+    run_id = str(manifest.get("run_id") or run_dir.name)
+    status = str(manifest.get("status") or "unknown")
+    started = manifest.get("created_at_utc")
+    ended = None
+    if commit is not None:
+        ended = commit.get("committed_at_utc")
+    if ended is None:
+        ended = manifest.get("updated_at_utc")
+    if ended is None:
+        ended = started
+
+    candidates = manifest.get("candidates") or []
+    candidate_count = len(candidates) if isinstance(candidates, list) else 0
+    excluded_videos = manifest.get("excluded_videos") or []
+    excluded_count = len(excluded_videos) if isinstance(excluded_videos, list) else 0
+
+    samples = (stage.get("samples") or []) if stage else []
+    sample_dicts = [item for item in samples if isinstance(item, dict)]
+    passed_samples = [item for item in sample_dicts if bool(item.get("passed"))]
+    failed_samples = [item for item in sample_dicts if not bool(item.get("passed"))]
+    warning_samples = [item for item in sample_dicts if item.get("warnings")]
+    warning_count = sum(int(item.get("warning_count") or 0) for item in warning_samples)
+
+    entries = (commit.get("entries") or []) if commit else []
+    committed_count = len(entries) if isinstance(entries, list) else 0
+
+    verify_failures: list[str] = []
+    if verification is not None and not bool(verification.get("passed", True)):
+        verify_failures = [str(item) for item in verification.get("failures") or []]
+
+    lines = [
+        "CC-Cover 运行摘要",
+        "================",
+        "",
+        f"运行 ID：{run_id}",
+        f"状态：{run_status_label(status)}（{status}）",
+        f"开始时间：{started}",
+        f"结束时间：{ended}",
+        "",
+        "统计",
+        "----",
+        f"候选总数：{candidate_count}",
+        f"已排除：{excluded_count}（本次不处理）",
+        f"质量门禁通过：{len(passed_samples)}",
+        f"质量门禁失败：{len(failed_samples)}",
+        f"写回成功：{committed_count}",
+        f"告警：{len(warning_samples)} 个视频，共 {warning_count} 条",
+    ]
+    if verification is not None:
+        if verify_failures:
+            lines.append(f"最终复核：失败（{len(verify_failures)} 项）")
+        else:
+            lines.append(
+                f"最终复核：{int(verification.get('verified_count') or 0)} 项通过"
+            )
+
+    lines += ["", "告警明细", "--------"]
+    if warning_samples:
+        for sample in warning_samples:
+            lines.append(_sample_line(sample))
+            lines.extend(f"  - {warning}" for warning in sample.get("warnings") or [])
+    else:
+        lines.append("（无）")
+
+    lines += ["", "失败明细", "--------"]
+    failure_lines: list[str] = []
+    for sample in failed_samples:
+        failure_lines.append(_sample_line(sample))
+        failure_lines.extend(f"  - {error}" for error in sample.get("errors") or [])
+    failure_lines.extend(f"  - {failure}" for failure in verify_failures)
+    if failure_lines:
+        lines.extend(failure_lines)
+    else:
+        lines.append("（无）")
+
+    lines += ["", "写回清单", "--------"]
+    if entries:
+        for entry in entries:
+            sample_id = entry.get("sample_id", "")
+            target = entry.get("target_path", "")
+            size = entry.get("target_size", "?")
+            lines.append(f"{sample_id} {target}（{size} 字节）".strip())
+    else:
+        lines.append("（未写回）")
+
+    lines += ["", "路径", "----", f"运行目录：{run_dir}"]
+    return "\n".join(lines) + "\n"
+
+
+def write_summary(run_dir: Path) -> Path:
+    """在运行目录写入 summary.txt（UTF-8），返回其路径。"""
+    run_dir = run_dir.expanduser().resolve()
+    path = run_dir / SUMMARY_FILENAME
+    write_bytes_atomic(path, build_summary_text(run_dir).encode("utf-8"))
+    return path
 
 
 def options_to_dict(options: PipelineOptions) -> dict[str, Any]:
@@ -858,6 +995,13 @@ class SubtitlePipeline:
             raise PipelineError("最终复核失败：\n" + "\n".join(failures))
         return report
 
+    def _finalize_summary(self) -> None:
+        """尽力写 summary.txt；失败只告警，不掩盖运行结果。"""
+        try:
+            write_summary(self.run_dir)
+        except (OSError, PipelineError) as exc:
+            print(f"警告：无法生成运行摘要：{exc}", file=sys.stderr, flush=True)
+
     def execute(self) -> Path:
         validate_protected(self.protected)
         validate_candidates(self.candidates, require_initial_target=True)
@@ -871,20 +1015,23 @@ class SubtitlePipeline:
                 "hotword_count": len(self.hotwords),
             },
         )
-        pilot = list(self.manifest["phases"]["pilot"])
-        remaining = list(self.manifest["phases"]["remaining"])
-        if pilot:
-            self.run_engine("funasr", pilot)
-            self.run_engine("faster_whisper", pilot)
-            self.stage(pilot)
-        if remaining:
-            self.run_engine("funasr", remaining)
-            self.run_engine("faster_whisper", remaining)
-            self.stage(list(self.manifest["phases"]["all"]))
-        elif pilot:
-            self.stage(pilot)
-        self.commit()
-        self.verify()
+        try:
+            pilot = list(self.manifest["phases"]["pilot"])
+            remaining = list(self.manifest["phases"]["remaining"])
+            if pilot:
+                self.run_engine("funasr", pilot)
+                self.run_engine("faster_whisper", pilot)
+                self.stage(pilot)
+            if remaining:
+                self.run_engine("funasr", remaining)
+                self.run_engine("faster_whisper", remaining)
+                self.stage(list(self.manifest["phases"]["all"]))
+            elif pilot:
+                self.stage(pilot)
+            self.commit()
+            self.verify()
+        finally:
+            self._finalize_summary()
         return self.run_dir
 
 
