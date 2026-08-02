@@ -22,6 +22,7 @@ def raw_segment(start: float, end: float, text: str = "hello") -> SimpleNamespac
 class FakeWhisperModel:
     def __init__(self, raw_segments: list[SimpleNamespace]) -> None:
         self.raw_segments = raw_segments
+        self.last_kwargs: dict[str, object] = {}
 
     def transcribe(
         self,
@@ -37,6 +38,7 @@ class FakeWhisperModel:
         hallucination_silence_threshold: float = 2.0,
         **kwargs: object,
     ) -> tuple[object, SimpleNamespace]:
+        self.last_kwargs = dict(kwargs)
         return iter(self.raw_segments), SimpleNamespace(duration_after_vad=None)
 
 
@@ -69,6 +71,15 @@ class FasterWhisperEngineTests(unittest.TestCase):
             any("零长度" in record for record in logs.output),
             logs.output,
         )
+
+    def test_empty_hotwords_skip_engine_prompt_without_fallback(self) -> None:
+        engine = self._engine([raw_segment(0.0, 5.0, "hello")])
+
+        segments, _metadata = engine.transcribe(Path("audio.wav"), 5.0, [])
+
+        self.assertEqual([segment.text for segment in segments], ["hello"])
+        self.assertNotIn("hotwords", engine.model.last_kwargs)
+        self.assertNotIn("initial_prompt", engine.model.last_kwargs)
 
 
 if __name__ == "__main__":

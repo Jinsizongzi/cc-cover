@@ -47,43 +47,8 @@ from cc_cover.models import (
 ASCII_TOKEN_PATTERN = re.compile(
     r"[A-Za-z]+(?:[._+#/-][A-Za-z0-9]+)*|\d+(?:\.\d+)?"
 )
+FILENAME_HOTWORD_PATTERN = re.compile(r"[A-Za-z0-9]+")
 SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-DEFAULT_HOTWORDS = (
-    "AI",
-    "机器学习",
-    "深度学习",
-    "神经网络",
-    "自然语言处理",
-    "计算机视觉",
-    "Python",
-    "PyTorch",
-    "TensorFlow",
-    "NumPy",
-    "Tensor",
-    "张量",
-    "线性回归",
-    "梯度下降",
-    "反向传播",
-    "损失函数",
-    "学习率",
-    "优化器",
-    "SGD",
-    "Adam",
-    "CNN",
-    "RNN",
-    "LSTM",
-    "GRU",
-    "Transformer",
-    "BERT",
-    "Word2Vec",
-    "Embedding",
-    "ReLU",
-    "Sigmoid",
-    "Softmax",
-    "API",
-    "GPU",
-    "CUDA",
-)
 
 WARNING_DENSITY_MIN = 100.0
 WARNING_DENSITY_MAX = 600.0
@@ -187,8 +152,17 @@ def options_from_dict(value: Mapping[str, Any]) -> PipelineOptions:
     )
 
 
+def extract_filename_hotwords(stem: str) -> list[str]:
+    """从文件名主干提取热词：仅保留含英文字母的字母/数字 token，纯数字过滤。"""
+    return [
+        token
+        for token in FILENAME_HOTWORD_PATTERN.findall(stem)
+        if any(character.isalpha() for character in token)
+    ]
+
+
 def load_hotwords(options: PipelineOptions, candidates: Sequence[Candidate]) -> list[str]:
-    values = list(DEFAULT_HOTWORDS)
+    values: list[str] = []
     if options.hotwords_file is not None:
         if not options.hotwords_file.is_file():
             raise PipelineError(f"热词文件不存在：{options.hotwords_file}")
@@ -198,7 +172,7 @@ def load_hotwords(options: PipelineOptions, candidates: Sequence[Candidate]) -> 
                 continue
             values.extend(part.strip() for part in text.split(",") if part.strip())
     for candidate in candidates:
-        values.extend(ASCII_TOKEN_PATTERN.findall(candidate.video_path.stem))
+        values.extend(extract_filename_hotwords(candidate.video_path.stem))
     unique: list[str] = []
     seen: set[str] = set()
     for value in values:

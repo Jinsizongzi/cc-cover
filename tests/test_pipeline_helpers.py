@@ -10,14 +10,105 @@ from cc_cover.engines import (
     local_faster_whisper_model,
     local_funasr_model,
 )
-from cc_cover.models import PipelineOptions, Segment
+from cc_cover.models import Candidate, Fingerprint, PipelineOptions, Segment
 from cc_cover.pipeline import (
     PipelineError,
+    extract_filename_hotwords,
+    load_hotwords,
     options_from_dict,
     options_to_dict,
     validate_segments,
     write_bytes_atomic,
 )
+
+
+def hotwords_options(hotwords_file: Path | None = None) -> PipelineOptions:
+    return PipelineOptions(
+        roots=[Path("videos").resolve()],
+        runs_root=Path("runs").resolve(),
+        model_cache=Path("models").resolve(),
+        hotwords_file=hotwords_file,
+    )
+
+
+def hotword_candidate(name: str) -> Candidate:
+    video = Path("videos") / f"{name}.mp4"
+    return Candidate(
+        sample_id=f"sample-{name}",
+        root=Path("videos").resolve(),
+        video_path=video,
+        target_path=video.with_suffix(".txt"),
+        initial_state="missing",
+        video_fingerprint=Fingerprint(False, None, None, None),
+        target_fingerprint=Fingerprint(False, None, None, None),
+    )
+
+
+class HotwordTests(unittest.TestCase):
+    def test_filename_tokens_keep_only_alphanumeric_words_with_letters(self) -> None:
+        cases = {
+            "机器学习-01-第2讲": [],
+            "PyTorch-2.0-第3章": ["PyTorch"],
+            "AI入门-2026": ["AI"],
+            "GPT4-4K": ["GPT4", "4K"],
+            "C++基础": ["C"],
+            "纯数字-123": [],
+            "a1b": ["a1b"],
+        }
+        for stem, expected in cases.items():
+            with self.subTest(stem=stem):
+                self.assertEqual(extract_filename_hotwords(stem), expected)
+
+    def test_load_hotwords_combines_user_file_then_filename_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hotwords_file = Path(temporary) / "hotwords.txt"
+            hotwords_file.write_text(
+                "# 注释\n\nAlpha, beta\n机器学习\n",
+                encoding="utf-8",
+            )
+            candidates = [
+                hotword_candidate("Alpha-01-第1讲"),
+                hotword_candidate("beta-2.0"),
+                hotword_candidate("PyTorch-入门"),
+            ]
+
+            result = load_hotwords(hotwords_options(hotwords_file), candidates)
+
+        self.assertEqual(result, ["Alpha", "beta", "机器学习", "PyTorch"])
+
+    def test_load_hotwords_dedupes_case_insensitively_keeping_first_form(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hotwords_file = Path(temporary) / "hotwords.txt"
+            hotwords_file.write_text("GPT\ngpt\nGPT4\n", encoding="utf-8")
+
+            result = load_hotwords(hotwords_options(hotwords_file), [])
+
+        self.assertEqual(result, ["GPT", "GPT4"])
+
+    def test_load_hotwords_caps_combined_unique_at_120_after_dedupe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hotwords_file = Path(temporary) / "hotwords.txt"
+            file_terms = [f"term{i:03d}" for i in range(60)]
+            hotwords_file.write_text("\n".join(file_terms) + "\n", encoding="utf-8")
+            candidates = [hotword_candidate(f"extra{i}") for i in range(65)]
+
+            result = load_hotwords(hotwords_options(hotwords_file), candidates)
+
+        self.assertEqual(len(result), 120)
+        self.assertEqual(result[:60], file_terms)
+        self.assertEqual(result[60], "extra0")
+        self.assertEqual(result[-1], "extra59")
+        self.assertNotIn("extra60", result)
+
+    def test_load_hotwords_returns_empty_without_fallback(self) -> None:
+        candidates = [hotword_candidate("01"), hotword_candidate("机器学习")]
+
+        self.assertEqual(load_hotwords(hotwords_options(), candidates), [])
+        self.assertEqual(load_hotwords(hotwords_options(), []), [])
+
+    def test_load_hotwords_raises_when_user_file_missing(self) -> None:
+        with self.assertRaises(PipelineError):
+            load_hotwords(hotwords_options(Path("missing-hotwords.txt")), [])
 
 
 class PipelineHelperTests(unittest.TestCase):
