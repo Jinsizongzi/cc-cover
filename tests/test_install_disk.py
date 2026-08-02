@@ -66,11 +66,20 @@ class EstimateBytesTests(unittest.TestCase):
             estimate_install_required_bytes("cpu"),
         )
 
-    def test_estimates_are_at_least_a_few_gigabytes(self) -> None:
-        self.assertGreater(estimate_install_required_bytes("cpu"), 2 * 1024**3)
+    def test_estimates_are_a_few_gigabytes_not_tens_of_gigabytes(self) -> None:
+        cpu_total = estimate_install_required_bytes("cpu")
+        self.assertGreater(cpu_total, 2 * 1024**3)
+        self.assertLess(cpu_total, 20 * 1024**3)
+        self.assertLess(estimate_install_required_bytes("cuda"), 30 * 1024**3)
 
     def test_torch_cuda_wheel_is_multi_gigabyte(self) -> None:
         self.assertGreater(TORCH_CUDA_BYTES, 2 * 1024**3)
+        self.assertLess(TORCH_CUDA_BYTES, 10 * 1024**3)
+
+    def test_model_estimates_are_gigabyte_scale(self) -> None:
+        self.assertGreater(FUNASR_MODELS_BYTES, 1024**3)
+        self.assertLess(FUNASR_MODELS_BYTES, 5 * 1024**3)
+        self.assertLess(FAST_WHISPER_MODELS_BYTES, 3 * 1024**3)
 
 
 class DiskPrecheckTests(unittest.TestCase):

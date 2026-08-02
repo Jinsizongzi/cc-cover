@@ -35,14 +35,14 @@ CLEANUP_WARNING_BYTES = 5 * 1024**3
 # 磁盘预检与安装进度使用的字节估算（仅用于提示与粗估剩余，非精确计量）。
 # torch + torchaudio 轮子：CPU 约 330MB，CUDA cu121 约 2.7GB，均留余量。
 TORCH_CPU_BYTES = 400 * 1024**2
-TORCH_CUDA_BYTES = 3200 * 1024**3
+TORCH_CUDA_BYTES = 3200 * 1024**2
 # 默认模型：FunASR（paraformer-large + fsmn-vad + ct-punc）约 2GB，large-v3-turbo 约 1.6GB。
-FUNASR_MODELS_BYTES = 2500 * 1024**3
-FAST_WHISPER_MODELS_BYTES = 1600 * 1024**3
+FUNASR_MODELS_BYTES = 2500 * 1024**2
+FAST_WHISPER_MODELS_BYTES = 1600 * 1024**2
 # 其余 ASR 依赖轮子（funasr、faster-whisper、ctranslate2 等）约 250MB。
 ASR_DEPENDENCIES_BYTES = 400 * 1024**2
 # venv/临时目录开销与磁盘碎片余量。
-INSTALL_BUFFER_BYTES = 1000 * 1024**3
+INSTALL_BUFFER_BYTES = 1024**3
 
 
 def install_download_bytes(device: str) -> int:
