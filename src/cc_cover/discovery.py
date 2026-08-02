@@ -10,7 +10,29 @@ from cc_cover.models import Candidate, Fingerprint, ProtectedText
 
 
 VIDEO_EXTENSIONS = frozenset(
-    {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"}
+    {
+        ".mp4",
+        ".mkv",
+        ".avi",
+        ".mov",
+        ".wmv",
+        ".flv",
+        ".webm",
+        ".m4v",
+        ".ts",
+        ".m2ts",
+        ".mts",
+        ".ogv",
+        ".mpg",
+        ".mpeg",
+        ".3gp",
+        ".rmvb",
+        ".rm",
+        ".vob",
+        ".asf",
+        ".f4v",
+        ".divx",
+    }
 )
 
 
@@ -19,13 +41,26 @@ class DiscoveryError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class TargetConflict:
+    """多个视频指向同一目标 TXT 的冲突。"""
+
+    target_path: Path
+    videos: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
 class DiscoveryReport:
     roots: tuple[Path, ...]
     candidates: tuple[Candidate, ...]
     protected_texts: tuple[ProtectedText, ...]
+    conflicts: tuple[TargetConflict, ...]
     video_count: int
     matched_text_count: int
     missing_text_count: int
+
+    @property
+    def conflict_count(self) -> int:
+        return len(self.conflicts)
 
 
 def sha256_file(path: Path) -> str:
@@ -85,17 +120,14 @@ def normalize_roots(roots: Iterable[Path]) -> list[Path]:
 
 def discover(
     roots: Iterable[Path],
-    include_whitespace_only: bool = False,
-    include_missing: bool = False,
     hash_videos: bool = True,
 ) -> DiscoveryReport:
     normalized_roots = normalize_roots(roots)
-    videos: list[tuple[Path, Path]] = []
     seen_videos: set[Path] = set()
+    root_for_video: dict[Path, Path] = {}
+    entries_by_target: dict[str, list[tuple[Path, Path]]] = {}
     matched_text_count = 0
     missing_text_count = 0
-    root_for_video: dict[Path, Path] = {}
-    candidate_states: dict[Path, str] = {}
     for root in normalized_roots:
         for video in sorted(root.rglob("*"), key=lambda item: str(item).casefold()):
             if not video.is_file() or video.suffix.casefold() not in VIDEO_EXTENSIONS:
@@ -106,30 +138,45 @@ def discover(
             seen_videos.add(resolved_video)
             root_for_video[resolved_video] = root
             target = video.with_suffix(".txt").resolve()
-            videos.append((resolved_video, target))
-            if not target.exists():
+            entries_by_target.setdefault(str(target).casefold(), []).append(
+                (resolved_video, target)
+            )
+            if target.exists():
+                matched_text_count += 1
+            else:
                 missing_text_count += 1
-                if include_missing:
-                    candidate_states[resolved_video] = "missing"
-                continue
-            matched_text_count += 1
+
+    conflicts: list[TargetConflict] = []
+    conflict_videos: set[Path] = set()
+    for target_key in sorted(entries_by_target):
+        entries = entries_by_target[target_key]
+        if len(entries) < 2:
+            continue
+        videos = tuple(video for video, _target in entries)
+        conflict_videos.update(videos)
+        conflicts.append(TargetConflict(target_path=entries[0][1], videos=videos))
+
+    all_videos = [
+        entry for entries in entries_by_target.values() for entry in entries
+    ]
+    candidates: list[Candidate] = []
+    for video, target in sorted(all_videos, key=lambda item: str(item[0]).casefold()):
+        if video in conflict_videos:
+            continue
+        if not target.exists():
+            state = "missing"
+        else:
             payload = target.read_bytes()
             if len(payload) == 0:
-                candidate_states[resolved_video] = "zero_byte"
-                continue
-            if include_whitespace_only and text_is_whitespace_only(payload):
-                candidate_states[resolved_video] = "whitespace_only"
-                continue
-    candidates: list[Candidate] = []
-    for video, target in sorted(videos, key=lambda item: str(item[0]).casefold()):
-        state = candidate_states.get(video)
-        if state is None:
-            continue
-        root = root_for_video[video]
+                state = "zero_byte"
+            elif text_is_whitespace_only(payload):
+                state = "whitespace_only"
+            else:
+                state = "nonempty"
         candidates.append(
             Candidate(
-                sample_id=f"CC-MISSING-{len(candidates) + 1:05d}",
-                root=root,
+                sample_id=f"CC-CANDIDATE-{len(candidates) + 1:05d}",
+                root=root_for_video[video],
                 video_path=video,
                 target_path=target,
                 initial_state=state,
@@ -137,13 +184,14 @@ def discover(
                 target_fingerprint=fingerprint(target, include_hash=True),
             )
         )
-    candidate_targets = {candidate.target_path for candidate in candidates}
+
+    targets = {target for _video, target in all_videos}
     protected: list[ProtectedText] = []
     seen_texts: set[Path] = set()
     for root in normalized_roots:
         for path in sorted(root.rglob("*.txt"), key=lambda item: str(item).casefold()):
             resolved = path.resolve()
-            if resolved in seen_texts or resolved in candidate_targets:
+            if resolved in seen_texts or resolved in targets:
                 continue
             seen_texts.add(resolved)
             if path.is_file() and path.stat().st_size > 0:
@@ -152,7 +200,8 @@ def discover(
         roots=tuple(normalized_roots),
         candidates=tuple(candidates),
         protected_texts=tuple(protected),
-        video_count=len(videos),
+        conflicts=tuple(conflicts),
+        video_count=len(all_videos),
         matched_text_count=matched_text_count,
         missing_text_count=missing_text_count,
     )

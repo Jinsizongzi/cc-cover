@@ -40,8 +40,8 @@ ERROR = "#b42318"
 
 FEATURE_TEXT = """核心功能
 
-1. 精确扫描
-仅处理与视频同名、且字节大小严格为 0 的 TXT。已有内容的字幕默认受到保护，不会被覆盖。
+1. 全量扫描
+所有视频默认都是候选：无论同名 TXT 是否存在、是否为空或已有内容，都会重新生成并在校验通过后覆盖。与视频不同名的 TXT 不会被触碰。
 
 2. 双模型字幕生成
 FunASR 负责中文正文和句级时间戳；faster-whisper 作为第二模型，对识别结果进行匹配、差异分析和风险审计。
@@ -49,16 +49,19 @@ FunASR 负责中文正文和句级时间戳；faster-whisper 作为第二模型�
 3. 固定输出格式
 字幕固定输出为 MM:SS / H:MM:SS 时间戳加字幕文字，段间空一行；UTF-8 无 BOM、CRLF 换行、末尾换行。
 
-4. 自动替换空字幕
-用户点击“开始补全并替换”后，软件完成扫描、识别、质量校验和格式校验，并直接原子替换目标空 TXT，无需额外写回参数。
+4. 自动替换字幕
+用户点击“开始补全并替换”后，软件完成扫描、识别、质量校验和格式校验，并直接原子替换目标 TXT，无需额外写回参数。
 
-5. 写回保护
+5. 冲突检测
+发现阶段检测同 stem 多视频指向同一目标 TXT 的冲突，标记“冲突”，默认不处理、不写回，报告会列出所有相关视频。
+
+6. 写回保护
 处理前记录视频和字幕快照；写回前复核文件状态；写回时先保存备份；批量写回失败会自动回滚。
 
-6. 可恢复运行
+7. 可恢复运行
 模型结果、审计报告、待写字幕、备份和复核报告都会保存在运行目录。中断后可通过“继续中断任务”选择运行目录继续。
 
-7. 本地处理
+8. 本地处理
 视频、音频和字幕均在本机处理。只有首次安装依赖或首次下载模型时需要联网。"""
 
 
@@ -76,8 +79,8 @@ GUIDE_TEXT = """操作指南
 
 1. 点击“选择文件夹”，选择需要处理的视频目录。软件不会预设任何扫描路径。
 2. 选择目录后会自动进行快速扫描，也可以点击“重新扫描”。
-3. 在候选列表中确认待处理 TXT。默认只显示严格的零字节文件。
-4. 根据需要调整设备、视频哈希、空白 TXT 或缺失 TXT 选项。
+3. 在候选列表中确认待补全字幕；冲突项会标记“冲突”，默认不会处理。
+4. 根据需要调整推理设备、视频哈希保护与 FFmpeg 路径。
 5. 点击“开始补全并替换”。软件将自动完成双模型识别、审计、格式化、备份、替换和最终复核。
 6. 在“运行日志”页查看实时进度。完成后可点击“打开运行目录”查看详细产物。
 
@@ -91,13 +94,11 @@ GUIDE_TEXT = """操作指南
 
 • 自动设备：优先使用可用 GPU，否则使用 CPU。
 • 视频哈希保护：处理前计算视频 SHA-256，安全性更高，但首次扫描大型目录会更慢。
-• 包含纯空白 TXT：除零字节文件外，也处理只有空格或换行的 TXT。
-• 创建缺失 TXT：为没有同名 TXT 的视频新建字幕文件。
 • FFmpeg：通常无需指定；只有自动检测失败时才选择 ffmpeg.exe。
 
 注意事项
 
-• 点击开始后，校验通过的空 TXT 会被直接替换。
+• 点击开始后，校验通过的同名 TXT 会被直接替换或创建。
 • 不要在运行期间移动、改名或编辑候选视频和 TXT。
 • 首次运行模型会下载较大的模型文件，请保持网络稳定和足够磁盘空间。
 • 软件关闭前会提示是否停止正在运行的任务。"""
@@ -119,8 +120,6 @@ class CCCoverApp(ttk.Frame):
         self.device = tk.StringVar(value="auto")
         self.accelerator = tk.StringVar(value="cuda")
         self.ffmpeg = tk.StringVar()
-        self.include_whitespace = tk.BooleanVar(value=False)
-        self.include_missing = tk.BooleanVar(value=False)
         self.hash_videos = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="正在检查运行环境…")
         self.environment_status = tk.StringVar(value="检查中")
@@ -296,14 +295,6 @@ class CCCoverApp(ttk.Frame):
         ttk.Checkbutton(
             options_row, text="视频哈希保护", variable=self.hash_videos
         ).pack(side="left")
-        ttk.Checkbutton(
-            options_row,
-            text="包含纯空白 TXT",
-            variable=self.include_whitespace,
-        ).pack(side="left", padx=(16, 0))
-        ttk.Checkbutton(
-            options_row, text="创建缺失 TXT", variable=self.include_missing
-        ).pack(side="left", padx=(16, 0))
 
         ffmpeg_row = ttk.Frame(options_panel, style="Panel.TFrame")
         ffmpeg_row.pack(fill="x", pady=(10, 0))
@@ -426,8 +417,6 @@ class CCCoverApp(ttk.Frame):
         ffmpeg_text = self.ffmpeg.get().strip().strip('"')
         return GuiOptions(
             device=self.device.get(),
-            include_whitespace_only=self.include_whitespace.get(),
-            include_missing=self.include_missing.get(),
             hash_videos=self.hash_videos.get(),
             ffmpeg=Path(ffmpeg_text).resolve() if ffmpeg_text else None,
         )
@@ -786,10 +775,23 @@ class CCCoverApp(ttk.Frame):
                     "MM:SS / H:MM:SS",
                 ),
             )
+        for conflict in report.get("conflicts", []):
+            for video in conflict.get("videos", []):
+                self.candidate_tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        "冲突",
+                        video,
+                        conflict.get("target_path", ""),
+                        "—",
+                    ),
+                )
         self.summary.set(
-            "视频 {video} 个 · 待补全 {candidate} 个 · 受保护非空 TXT {protected} 个".format(
+            "视频 {video} 个 · 待补全 {candidate} 个 · 冲突 {conflict} 个 · 受保护非空 TXT {protected} 个".format(
                 video=report.get("video_count", 0),
                 candidate=report.get("candidate_count", 0),
+                conflict=report.get("conflict_count", 0),
                 protected=report.get("protected_nonempty_txt_count", 0),
             )
         )

@@ -121,7 +121,5 @@ class PipelineOptions:
     funasr_punc_model: str = "ct-punc"
     faster_whisper_model: str = "large-v3-turbo"
     hotwords_file: Path | None = None
-    include_whitespace_only: bool = False
-    include_missing: bool = False
     hash_videos: bool = True
     pilot_count: int = 2

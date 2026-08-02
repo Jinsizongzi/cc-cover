@@ -81,6 +81,25 @@ class GuiSupportTests(unittest.TestCase):
         self.assertIn("--no-hash-videos", scan)
         self.assertIn("--no-hash-videos", transcribe)
 
+    def test_commands_never_pass_removed_discovery_toggles(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True,
+                bundle_root=base / "bundle",
+                local_app_data=base / "local",
+            )
+            selected = base / "selected"
+            options = GuiOptions(device="cpu")
+            scan = scan_command(paths, selected, options)
+            transcribe = transcribe_command(paths, selected, options)
+
+        for command in (scan, transcribe):
+            self.assertNotIn("--include-missing", command)
+            self.assertNotIn("--include-whitespace-only", command)
+        create_parser().parse_args(scan[3:])
+        create_parser().parse_args(transcribe[3:])
+
     def test_setup_commands_select_requested_torch_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
