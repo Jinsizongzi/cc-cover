@@ -13,12 +13,12 @@ from cc_cover.gui_support import (
     INSTALL_BUFFER_BYTES,
     InstallProgressSnapshot,
     InstallProgressTracker,
+    RuntimePaths,
     TORCH_CPU_BYTES,
     TORCH_CUDA_BYTES,
     clean_model_cache,
     clear_all_data_text,
     clear_local_data,
-    disk_free_bytes,
     disk_precheck,
     disk_precheck_text,
     estimate_install_required_bytes,
@@ -74,15 +74,6 @@ class EstimateBytesTests(unittest.TestCase):
 
 
 class DiskPrecheckTests(unittest.TestCase):
-    def test_disk_free_bytes_creates_missing_target(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            target = Path(temporary) / "nested" / "data"
-
-            free = disk_free_bytes(target)
-
-            self.assertGreater(free, 0)
-            self.assertTrue(target.is_dir())
-
     def test_precheck_reports_sufficient_when_free_is_large(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "data"
@@ -189,13 +180,16 @@ class InstallProgressTrackerTests(unittest.TestCase):
         snapshot = tracker.snapshot(now=5.0)
 
         self.assertEqual(snapshot.downloaded_bytes, 100 * 1024**2)
-        self.assertEqual(snapshot.percent, 100)
 
-    def test_percent_rounds_to_nearest_integer(self) -> None:
+    def test_percent_reflects_completed_components(self) -> None:
         tracker = InstallProgressTracker(total_bytes=1000 * 1024**2, component_count=4)
-        tracker.on_output("Downloading a.whl (250.0 MB)\n")
+        self.assertEqual(tracker.snapshot(now=5.0).percent, 0)
 
-        self.assertEqual(tracker.snapshot(now=5.0).percent, 25)
+        tracker.on_component(1)
+        self.assertEqual(tracker.snapshot(now=5.0).percent, 0)
+
+        tracker.on_component(3)
+        self.assertEqual(tracker.snapshot(now=5.0).percent, 50)
 
     def test_speed_and_remaining_estimated_from_elapsed(self) -> None:
         tracker = InstallProgressTracker(
@@ -225,7 +219,7 @@ class InstallProgressTrackerTests(unittest.TestCase):
 
         snapshot = tracker.snapshot(now=60.0)
 
-        self.assertEqual(snapshot.percent, 100)
+        self.assertEqual(snapshot.downloaded_bytes, 500 * 1024**2)
         self.assertIsNone(snapshot.remaining_seconds)
 
     def test_zero_total_never_divides_by_zero(self) -> None:
@@ -400,7 +394,7 @@ def disk_precheck_result(
     )
 
 
-def _paths(root: Path) -> object:
+def _paths(root: Path) -> RuntimePaths:
     return runtime_paths(frozen=True, bundle_root=root / "bundle", data_root=root / "data")
 
 

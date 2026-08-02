@@ -46,7 +46,11 @@ INSTALL_BUFFER_BYTES = 1000 * 1024**3
 
 
 def install_download_bytes(device: str) -> int:
-    """安装阶段 pip 实际下载量的估算（torch 轮子 + ASR 依赖，不含模型）。"""
+    """安装阶段 pip 实际下载量的估算（torch 轮子 + ASR 依赖，不含模型）。
+
+    用于安装进度条的总量与剩余时间估算；与``estimate_install_required_bytes``
+    不同——后者额外计入首次运行需下载的模型与余量，用于磁盘预检。
+    """
     torch_bytes = TORCH_CUDA_BYTES if device == "cuda" else TORCH_CPU_BYTES
     return torch_bytes + ASR_DEPENDENCIES_BYTES
 
@@ -71,15 +75,11 @@ class DiskCheck:
     sufficient: bool
 
 
-def disk_free_bytes(directory: Path) -> int:
-    """目标目录所在磁盘的剩余字节数；目录不存在时先创建。"""
-    target = Path(directory).expanduser().resolve()
-    target.mkdir(parents=True, exist_ok=True)
-    return int(shutil.disk_usage(target).free)
-
-
 def disk_precheck(directory: Path, required_bytes: int) -> DiskCheck:
-    """检查目标目录所在磁盘能否容纳所需字节；目标盘随数据根联动。"""
+    """检查目标目录所在磁盘能否容纳所需字节；目标盘随数据根联动。
+
+    目标目录尚不存在时先创建（数据根首次安装前可能尚未建立）。
+    """
     target = Path(directory).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(target)
@@ -399,12 +399,17 @@ def delete_runs(runs: Sequence[RunInfo]) -> int:
     return deleted
 
 
+def _reset_directory(directory: Path) -> None:
+    """删除目录内容并重建为空目录；目录不存在时直接创建。"""
+    target = Path(directory)
+    if target.is_dir():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+
+
 def clean_model_cache(paths: RuntimePaths) -> None:
     """删除模型缓存目录并重建；下次运行需重新下载模型。"""
-    cache = Path(paths.model_cache)
-    if cache.is_dir():
-        shutil.rmtree(cache)
-    cache.mkdir(parents=True, exist_ok=True)
+    _reset_directory(paths.model_cache)
 
 
 def local_data_usage(paths: RuntimePaths) -> int:
@@ -429,10 +434,7 @@ def clear_local_data(paths: RuntimePaths) -> None:
         paths.runs_root,
         paths.temp_root,
     ):
-        target = Path(directory)
-        if target.is_dir():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
+        _reset_directory(directory)
 
 
 def model_cache_cleanup_text(size_bytes: int) -> str:
@@ -628,8 +630,13 @@ class InstallProgressTracker:
             downloaded = min(downloaded, self.total_bytes)
         else:
             downloaded = 0
+        # 进度条百分比按组件完成度计算（已完成组件数 / 总数），避免在
+        # 安装收尾阶段因下载量提前到 100% 造成误导；下载细节由文案展示。
+        completed = max(0, self.component_index - 1)
         percent = (
-            round(downloaded / self.total_bytes * 100) if self.total_bytes else 0
+            round(completed / self.component_count * 100)
+            if self.component_count
+            else 0
         )
         speed: float | None = None
         remaining: float | None = None
