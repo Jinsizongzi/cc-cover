@@ -40,6 +40,7 @@ from cc_cover.formats import (
 )
 from cc_cover.models import (
     Candidate,
+    Phase,
     PipelineOptions,
     ProtectedText,
     Segment,
@@ -64,7 +65,9 @@ WARNING_NO_SPEECH_PROB_MAX = 0.6
 
 
 class PipelineError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, phase: Phase) -> None:
+        super().__init__(message)
+        self.phase = phase
 
 
 def utc_now() -> str:
@@ -92,15 +95,15 @@ def write_json_atomic(path: Path, payload: Any) -> None:
     )
 
 
-def load_json(path: Path) -> dict[str, Any]:
+def load_json(path: Path, *, phase: Phase) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise PipelineError(f"缺少运行产物：{path}") from exc
+        raise PipelineError(f"缺少运行产物：{path}", phase=phase) from exc
     except json.JSONDecodeError as exc:
-        raise PipelineError(f"运行产物 JSON 无效：{path}: {exc}") from exc
+        raise PipelineError(f"运行产物 JSON 无效：{path}: {exc}", phase=phase) from exc
     if not isinstance(value, dict):
-        raise PipelineError(f"运行产物顶层必须是对象：{path}")
+        raise PipelineError(f"运行产物顶层必须是对象：{path}", phase=phase)
     return value
 
 
@@ -124,7 +127,7 @@ def run_status_label(status: str) -> str:
 def load_optional_json(path: Path) -> dict[str, Any] | None:
     """读取可选的运行产物 JSON；文件缺失或无效时返回 None。"""
     try:
-        return load_json(path)
+        return load_json(path, phase=Phase.SETUP)
     except (PipelineError, OSError):
         return None
 
@@ -363,7 +366,9 @@ def load_hotwords(options: PipelineOptions, candidates: Sequence[Candidate]) -> 
     values: list[str] = []
     if options.hotwords_file is not None:
         if not options.hotwords_file.is_file():
-            raise PipelineError(f"热词文件不存在：{options.hotwords_file}")
+            raise PipelineError(
+                f"热词文件不存在：{options.hotwords_file}", phase=Phase.SETUP
+            )
         for line in options.hotwords_file.read_text(encoding="utf-8-sig").splitlines():
             text = line.strip()
             if not text or text.startswith("#"):
@@ -489,6 +494,12 @@ def faster_whisper_confidence(segments: Sequence[Segment]) -> dict[str, Any]:
     }
 
 
+def engine_phase(engine: str | None) -> Phase:
+    """引擎标识（不论连字符还是下划线拼法）到处理阶段的映射。"""
+    normalized = (engine or "").replace("-", "_")
+    return Phase.FUNASR if normalized == "funasr" else Phase.FASTER_WHISPER
+
+
 def validate_segments(
     segments: Sequence[Segment],
     duration_seconds: float,
@@ -501,8 +512,9 @@ def validate_segments(
         f"engine={engine}, sample={sample_id}, video={video_path}, "
         f"duration_ms={round(duration_seconds * 1000.0)}"
     )
+    phase = engine_phase(engine)
     if not segments:
-        raise PipelineError(f"引擎字幕段为空：{context}")
+        raise PipelineError(f"引擎字幕段为空：{context}", phase=phase)
     previous_start = -1
     maximum_end = math.ceil(duration_seconds * 1000.0) + 5000
     for index, segment in enumerate(segments):
@@ -515,22 +527,27 @@ def validate_segments(
         ):
             raise PipelineError(
                 f"引擎字幕段无效：#{index} "
-                f"({context}, start_ms={segment.start_ms}, end_ms={segment.end_ms})"
+                f"({context}, start_ms={segment.start_ms}, end_ms={segment.end_ms})",
+                phase=phase,
             )
         previous_start = segment.start_ms
 
 
-def validate_protected(protected: Sequence[ProtectedText]) -> None:
+def validate_protected(protected: Sequence[ProtectedText], *, phase: Phase) -> None:
     failures: list[str] = []
     for item in protected:
         actual = fingerprint(item.path, include_hash=True)
         if not fingerprints_match(actual, item.fingerprint):
             failures.append(str(item.path))
     if failures:
-        raise PipelineError("受保护的非空 TXT 发生变化：\n" + "\n".join(failures))
+        raise PipelineError(
+            "受保护的非空 TXT 发生变化：\n" + "\n".join(failures), phase=phase
+        )
 
 
-def validate_candidates(candidates: Sequence[Candidate], require_initial_target: bool) -> None:
+def validate_candidates(
+    candidates: Sequence[Candidate], require_initial_target: bool, *, phase: Phase
+) -> None:
     failures: list[str] = []
     for candidate in candidates:
         current_video = fingerprint(candidate.video_path, include_hash=False)
@@ -541,7 +558,9 @@ def validate_candidates(candidates: Sequence[Candidate], require_initial_target:
             if not fingerprints_match(current_target, candidate.target_fingerprint):
                 failures.append(f"目标 TXT 状态变化：{candidate.target_path}")
     if failures:
-        raise PipelineError("候选快照校验失败：\n" + "\n".join(failures))
+        raise PipelineError(
+            "候选快照校验失败：\n" + "\n".join(failures), phase=phase
+        )
 
 
 class SubtitlePipeline:
@@ -573,7 +592,7 @@ class SubtitlePipeline:
     ) -> "SubtitlePipeline":
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{os.getpid()}"
         if not SAFE_RUN_ID.fullmatch(run_id):
-            raise PipelineError(f"生成的 run_id 不安全：{run_id}")
+            raise PipelineError(f"生成的 run_id 不安全：{run_id}", phase=Phase.SETUP)
         run_dir = options.runs_root.expanduser().resolve() / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
         pilot_count = max(0, min(options.pilot_count, len(report.candidates)))
@@ -617,7 +636,7 @@ class SubtitlePipeline:
     @classmethod
     def resume(cls, run_dir: Path) -> "SubtitlePipeline":
         resolved = run_dir.expanduser().resolve()
-        manifest = load_json(resolved / "manifest.json")
+        manifest = load_json(resolved / "manifest.json", phase=Phase.SETUP)
         options = options_from_dict(manifest["options"])
         candidates = [Candidate.from_dict(item) for item in manifest["candidates"]]
         protected = [
@@ -635,13 +654,14 @@ class SubtitlePipeline:
         return self.run_dir / "engines" / engine / f"{sample_id}.json"
 
     def load_engine_output(self, engine: str, candidate: Candidate) -> dict[str, Any]:
-        payload = load_json(self.engine_output(engine, candidate.sample_id))
+        phase = engine_phase(engine)
+        payload = load_json(self.engine_output(engine, candidate.sample_id), phase=phase)
         if payload.get("sample_id") != candidate.sample_id:
-            raise PipelineError(f"{engine} sample_id 不匹配")
+            raise PipelineError(f"{engine} sample_id 不匹配", phase=phase)
         if Path(str(payload.get("source_path", ""))).resolve() != candidate.video_path:
-            raise PipelineError(f"{engine} source_path 不匹配")
+            raise PipelineError(f"{engine} source_path 不匹配", phase=phase)
         if payload.get("engine") != engine:
-            raise PipelineError(f"{engine} 引擎声明不匹配")
+            raise PipelineError(f"{engine} 引擎声明不匹配", phase=phase)
         segments = [Segment.from_dict(item) for item in payload.get("segments", [])]
         validate_segments(
             segments,
@@ -676,6 +696,7 @@ class SubtitlePipeline:
             engine = FasterWhisperEngine(
                 self.options, self.device, self.compute_type
             )
+        phase = engine_phase(engine_name)
         print(f"加载 {engine_name}：device={self.device}", flush=True)
         engine.load()
         try:
@@ -686,7 +707,9 @@ class SubtitlePipeline:
                 )
                 before = fingerprint(candidate.video_path, include_hash=False)
                 if not fingerprints_match_quick(before, candidate.video_fingerprint):
-                    raise PipelineError(f"视频在转写前发生变化：{candidate.video_path}")
+                    raise PipelineError(
+                        f"视频在转写前发生变化：{candidate.video_path}", phase=phase
+                    )
                 wav_path = self.run_dir / "work" / f"{candidate.sample_id}.wav"
                 started = time.perf_counter()
                 try:
@@ -699,7 +722,9 @@ class SubtitlePipeline:
                         wav_path.unlink()
                 after = fingerprint(candidate.video_path, include_hash=False)
                 if not fingerprints_match_quick(after, candidate.video_fingerprint):
-                    raise PipelineError(f"视频在转写后发生变化：{candidate.video_path}")
+                    raise PipelineError(
+                        f"视频在转写后发生变化：{candidate.video_path}", phase=phase
+                    )
                 validate_segments(
                     segments,
                     duration,
@@ -853,8 +878,10 @@ class SubtitlePipeline:
         }
 
     def stage(self, sample_ids: Sequence[str]) -> dict[str, Any]:
-        validate_protected(self.protected)
-        validate_candidates(self.candidates, require_initial_target=True)
+        validate_protected(self.protected, phase=Phase.QUALITY_GATE)
+        validate_candidates(
+            self.candidates, require_initial_target=True, phase=Phase.QUALITY_GATE
+        )
         selected = [
             candidate for candidate in self.candidates if candidate.sample_id in sample_ids
         ]
@@ -870,7 +897,10 @@ class SubtitlePipeline:
             ]
             duration = float(funasr_payload["duration_seconds"])
             if abs(duration - float(faster_payload["duration_seconds"])) > 0.05:
-                raise PipelineError(f"双模型音频时长不一致：{candidate.sample_id}")
+                raise PipelineError(
+                    f"双模型音频时长不一致：{candidate.sample_id}",
+                    phase=Phase.QUALITY_GATE,
+                )
             caption_payload = render_segments(funasr_segments)
             report = self.quality_report(
                 candidate,
@@ -893,7 +923,7 @@ class SubtitlePipeline:
         stage_path = self.run_dir / "stage_report.json"
         previous: dict[str, Any] = {}
         if stage_path.is_file():
-            previous = load_json(stage_path)
+            previous = load_json(stage_path, phase=Phase.QUALITY_GATE)
         merged = {
             str(item["sample_id"]): item
             for item in previous.get("samples", [])
@@ -937,18 +967,24 @@ class SubtitlePipeline:
             },
         )
         if not selected_passed:
-            raise PipelineError("试样或全量质量门禁未通过，未写回课程目录")
+            raise PipelineError(
+                "试样或全量质量门禁未通过，未写回课程目录", phase=Phase.QUALITY_GATE
+            )
         return stage_report
 
     def commit(self) -> dict[str, Any]:
-        stage_report = load_json(self.run_dir / "stage_report.json")
+        stage_report = load_json(
+            self.run_dir / "stage_report.json", phase=Phase.WRITEBACK
+        )
         if not stage_report.get("staged_all") or not stage_report.get("all_passed"):
-            raise PipelineError("全部字幕尚未通过质量门禁")
+            raise PipelineError("全部字幕尚未通过质量门禁", phase=Phase.WRITEBACK)
         reports = {
             str(item["sample_id"]): item for item in stage_report["samples"]
         }
-        validate_protected(self.protected)
-        validate_candidates(self.candidates, require_initial_target=True)
+        validate_protected(self.protected, phase=Phase.WRITEBACK)
+        validate_candidates(
+            self.candidates, require_initial_target=True, phase=Phase.WRITEBACK
+        )
         backups = self.run_dir / "backups"
         payloads: dict[str, bytes] = {}
         for candidate in self.candidates:
@@ -957,7 +993,9 @@ class SubtitlePipeline:
             validate_rendered(payload)
             expected_hash = str(reports[candidate.sample_id]["caption_sha256"])
             if hashlib.sha256(payload).hexdigest() != expected_hash:
-                raise PipelineError(f"暂存字幕哈希不匹配：{prepared}")
+                raise PipelineError(
+                    f"暂存字幕哈希不匹配：{prepared}", phase=Phase.WRITEBACK
+                )
             payloads[candidate.sample_id] = payload
             backup_dir = backups / candidate.sample_id
             original = candidate.target_path.read_bytes() if candidate.target_path.exists() else b""
@@ -978,7 +1016,9 @@ class SubtitlePipeline:
                 include_hash=candidate.video_fingerprint.sha256 is not None,
             )
             if not fingerprints_match(current_video, candidate.video_fingerprint):
-                raise PipelineError(f"写回前视频已变化：{candidate.video_path}")
+                raise PipelineError(
+                    f"写回前视频已变化：{candidate.video_path}", phase=Phase.WRITEBACK
+                )
         committed: list[Candidate] = []
         try:
             for candidate in self.candidates:
@@ -987,9 +1027,12 @@ class SubtitlePipeline:
             for candidate in self.candidates:
                 actual = candidate.target_path.read_bytes()
                 if actual != payloads[candidate.sample_id]:
-                    raise PipelineError(f"写回后内容不一致：{candidate.target_path}")
+                    raise PipelineError(
+                        f"写回后内容不一致：{candidate.target_path}",
+                        phase=Phase.WRITEBACK,
+                    )
                 validate_rendered(actual)
-            validate_protected(self.protected)
+            validate_protected(self.protected, phase=Phase.WRITEBACK)
         except Exception:
             for candidate in reversed(committed):
                 backup = backups / candidate.sample_id / "original.txt"
@@ -1024,7 +1067,7 @@ class SubtitlePipeline:
         return report
 
     def verify(self) -> dict[str, Any]:
-        validate_protected(self.protected)
+        validate_protected(self.protected, phase=Phase.VERIFY)
         failures: list[str] = []
         entries: list[dict[str, Any]] = []
         for candidate in self.candidates:
@@ -1061,7 +1104,9 @@ class SubtitlePipeline:
         }
         write_json_atomic(self.run_dir / "verification.json", report)
         if failures:
-            raise PipelineError("最终复核失败：\n" + "\n".join(failures))
+            raise PipelineError(
+                "最终复核失败：\n" + "\n".join(failures), phase=Phase.VERIFY
+            )
         return report
 
     def _finalize_summary(self) -> None:
@@ -1072,8 +1117,10 @@ class SubtitlePipeline:
             print(f"警告：无法生成运行摘要：{exc}", file=sys.stderr, flush=True)
 
     def execute(self) -> Path:
-        validate_protected(self.protected)
-        validate_candidates(self.candidates, require_initial_target=True)
+        validate_protected(self.protected, phase=Phase.SETUP)
+        validate_candidates(
+            self.candidates, require_initial_target=True, phase=Phase.SETUP
+        )
         self.update_manifest(
             status="running",
             runtime={

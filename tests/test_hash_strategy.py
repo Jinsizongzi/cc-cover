@@ -15,7 +15,7 @@ from cc_cover.discovery import (
     fingerprints_match_quick,
     sha256_file,
 )
-from cc_cover.models import PipelineOptions, Segment
+from cc_cover.models import Phase, PipelineOptions, Segment
 from cc_cover.pipeline import (
     PipelineError,
     SubtitlePipeline,
@@ -163,7 +163,11 @@ class PipelineHashStrategyTests(unittest.TestCase):
             with mock.patch(
                 "cc_cover.discovery.sha256_file", wraps=sha256_file
             ) as hasher:
-                validate_candidates([candidate], require_initial_target=True)
+                validate_candidates(
+                    [candidate],
+                    require_initial_target=True,
+                    phase=Phase.QUALITY_GATE,
+                )
 
             hashed_paths = [
                 Path(call.args[0]).resolve() for call in hasher.call_args_list

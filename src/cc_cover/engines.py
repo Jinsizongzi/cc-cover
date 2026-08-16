@@ -13,14 +13,16 @@ import wave
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from cc_cover.models import PipelineOptions, Segment
+from cc_cover.models import Phase, PipelineOptions, Segment
 
 
 logger = logging.getLogger(__name__)
 
 
 class EngineError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, phase: Phase) -> None:
+        super().__init__(message)
+        self.phase = phase
 
 
 FUNASR_CACHE_NAMES = {
@@ -33,7 +35,7 @@ FUNASR_CACHE_NAMES = {
 }
 
 
-def configure_model_cache(model_cache: Path) -> None:
+def configure_model_cache(model_cache: Path, *, phase: Phase) -> None:
     runtime_temp = model_cache / "funasr" / ".runtime-temp"
     paths = {
         "MODELSCOPE_CACHE": model_cache / "funasr",
@@ -52,7 +54,7 @@ def configure_model_cache(model_cache: Path) -> None:
             path.mkdir(parents=True, exist_ok=True)
             os.environ[name] = str(path)
     except OSError as exc:
-        raise EngineError(f"模型缓存目录不可写：{model_cache}: {exc}") from exc
+        raise EngineError(f"模型缓存目录不可写：{model_cache}: {exc}", phase=phase) from exc
     tempfile.tempdir = str(runtime_temp)
 
 
@@ -81,7 +83,7 @@ def local_faster_whisper_model(identifier: str, cache: Path) -> str:
 
 def resolve_device(requested: str, compute_type: str) -> tuple[str, str]:
     if requested not in {"auto", "cuda", "cpu"}:
-        raise EngineError(f"不支持的设备：{requested}")
+        raise EngineError(f"不支持的设备：{requested}", phase=Phase.SETUP)
     cuda_available = False
     try:
         import torch
@@ -95,10 +97,12 @@ def resolve_device(requested: str, compute_type: str) -> tuple[str, str]:
         cuda_available = cuda_available and ctranslate2.get_cuda_device_count() > 0
     except Exception:
         if requested == "cuda":
-            raise EngineError("无法导入 CTranslate2，不能使用 CUDA")
+            raise EngineError("无法导入 CTranslate2，不能使用 CUDA", phase=Phase.SETUP)
         cuda_available = False
     if requested == "cuda" and not cuda_available:
-        raise EngineError("请求了 CUDA，但当前环境没有可用的 CUDA ASR 运行时")
+        raise EngineError(
+            "请求了 CUDA，但当前环境没有可用的 CUDA ASR 运行时", phase=Phase.SETUP
+        )
     device = "cuda" if requested == "cuda" or requested == "auto" and cuda_available else "cpu"
     if compute_type == "auto":
         compute_type = "int8_float16" if device == "cuda" else "int8"
@@ -129,7 +133,8 @@ def resolve_ffmpeg(explicit: Path | None) -> Path:
     if system:
         return Path(system).resolve()
     raise EngineError(
-        "找不到 FFmpeg。请运行 setup.ps1，或通过 --ffmpeg/CC_COVER_FFMPEG 指定。"
+        "找不到 FFmpeg。请运行 setup.ps1，或通过 --ffmpeg/CC_COVER_FFMPEG 指定。",
+        phase=Phase.SETUP,
     )
 
 
@@ -143,7 +148,9 @@ def ffmpeg_version(ffmpeg: Path) -> str:
         check=False,
     )
     if completed.returncode != 0:
-        raise EngineError(f"FFmpeg 预检失败：{completed.stderr.strip()}")
+        raise EngineError(
+            f"FFmpeg 预检失败：{completed.stderr.strip()}", phase=Phase.SETUP
+        )
     return completed.stdout.splitlines()[0] if completed.stdout else str(ffmpeg)
 
 
@@ -215,12 +222,17 @@ def extract_audio(ffmpeg: Path, video: Path, output_wav: Path) -> float:
         check=False,
     )
     if completed.returncode != 0 or not output_wav.is_file():
-        raise EngineError(f"音频提取失败：{video}: {completed.stderr.strip()}")
+        raise EngineError(
+            f"音频提取失败：{video}: {completed.stderr.strip()}",
+            phase=Phase.AUDIO_EXTRACT,
+        )
     with wave.open(str(output_wav), "rb") as handle:
         frames = handle.getnframes()
         frame_rate = handle.getframerate()
     if frames <= 0 or frame_rate <= 0:
-        raise EngineError(f"提取出的 WAV 无有效音频：{output_wav}")
+        raise EngineError(
+            f"提取出的 WAV 无有效音频：{output_wav}", phase=Phase.AUDIO_EXTRACT
+        )
     return frames / frame_rate
 
 
@@ -322,7 +334,7 @@ def normalize_funasr(raw_result: Any, duration_seconds: float) -> list[Segment]:
             result.append(segment)
     result.sort(key=lambda item: (item.start_ms, item.end_ms))
     if not result:
-        raise EngineError("FunASR 没有生成有效字幕段")
+        raise EngineError("FunASR 没有生成有效字幕段", phase=Phase.FUNASR)
     return result
 
 
@@ -336,8 +348,10 @@ class FunASREngine:
         try:
             from funasr import AutoModel
         except ImportError as exc:
-            raise EngineError("未安装 FunASR，请先运行 setup.ps1") from exc
-        configure_model_cache(self.options.model_cache)
+            raise EngineError(
+                "未安装 FunASR，请先运行 setup.ps1", phase=Phase.FUNASR
+            ) from exc
+        configure_model_cache(self.options.model_cache, phase=Phase.FUNASR)
         cache = self.options.model_cache / "funasr"
         try:
             self.model = AutoModel(
@@ -351,13 +365,13 @@ class FunASREngine:
                 max_single_segment_time=30000,
             )
         except Exception as exc:
-            raise EngineError(f"FunASR 模型加载失败：{exc}") from exc
+            raise EngineError(f"FunASR 模型加载失败：{exc}", phase=Phase.FUNASR) from exc
 
     def transcribe(
         self, audio_path: Path, duration_seconds: float, hotwords: Sequence[str]
     ) -> tuple[list[Segment], dict[str, Any]]:
         if self.model is None:
-            raise EngineError("FunASR 尚未加载")
+            raise EngineError("FunASR 尚未加载", phase=Phase.FUNASR)
         parameters: dict[str, Any] = {
             "input": str(audio_path),
             "cache": {},
@@ -373,7 +387,9 @@ class FunASREngine:
         try:
             raw_result = self.model.generate(**parameters)
         except Exception as exc:
-            raise EngineError(f"FunASR 推理失败：{audio_path}: {exc}") from exc
+            raise EngineError(
+                f"FunASR 推理失败：{audio_path}: {exc}", phase=Phase.FUNASR
+            ) from exc
         elapsed = time.perf_counter() - started
         segments = normalize_funasr(raw_result, duration_seconds)
         return segments, {
@@ -402,8 +418,10 @@ class FasterWhisperEngine:
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:
-            raise EngineError("未安装 faster-whisper，请先运行 setup.ps1") from exc
-        configure_model_cache(self.options.model_cache)
+            raise EngineError(
+                "未安装 faster-whisper，请先运行 setup.ps1", phase=Phase.FASTER_WHISPER
+            ) from exc
+        configure_model_cache(self.options.model_cache, phase=Phase.FASTER_WHISPER)
         cache = self.options.model_cache / "faster-whisper"
         cache.mkdir(parents=True, exist_ok=True)
         identifier = local_faster_whisper_model(
@@ -417,13 +435,15 @@ class FasterWhisperEngine:
                 download_root=str(cache),
             )
         except Exception as exc:
-            raise EngineError(f"faster-whisper 模型加载失败：{exc}") from exc
+            raise EngineError(
+                f"faster-whisper 模型加载失败：{exc}", phase=Phase.FASTER_WHISPER
+            ) from exc
 
     def transcribe(
         self, audio_path: Path, duration_seconds: float, hotwords: Sequence[str]
     ) -> tuple[list[Segment], dict[str, Any]]:
         if self.model is None:
-            raise EngineError("faster-whisper 尚未加载")
+            raise EngineError("faster-whisper 尚未加载", phase=Phase.FASTER_WHISPER)
         signature = inspect.signature(self.model.transcribe)
         parameters = signature.parameters
         kwargs: dict[str, Any] = {
@@ -444,13 +464,19 @@ class FasterWhisperEngine:
                 kwargs["initial_prompt"] = "术语表：" + "、".join(hotwords)
         unsupported = [key for key in kwargs if key not in parameters]
         if unsupported:
-            raise EngineError("当前 faster-whisper 不支持参数：" + ", ".join(unsupported))
+            raise EngineError(
+                "当前 faster-whisper 不支持参数：" + ", ".join(unsupported),
+                phase=Phase.FASTER_WHISPER,
+            )
         started = time.perf_counter()
         try:
             iterator, info = self.model.transcribe(str(audio_path), **kwargs)
             raw_segments = list(iterator)
         except Exception as exc:
-            raise EngineError(f"faster-whisper 推理失败：{audio_path}: {exc}") from exc
+            raise EngineError(
+                f"faster-whisper 推理失败：{audio_path}: {exc}",
+                phase=Phase.FASTER_WHISPER,
+            ) from exc
         elapsed = time.perf_counter() - started
         segments: list[Segment] = []
         duration_ms = round(duration_seconds * 1000.0)
@@ -480,7 +506,9 @@ class FasterWhisperEngine:
             }
             segments.append(Segment(start, end, text, metadata))
         if not segments:
-            raise EngineError("faster-whisper 没有生成有效字幕段")
+            raise EngineError(
+                "faster-whisper 没有生成有效字幕段", phase=Phase.FASTER_WHISPER
+            )
         return segments, {
             "engine": "faster-whisper",
             "model": self.options.faster_whisper_model,

@@ -12,9 +12,10 @@ from cc_cover.engines import (
     local_faster_whisper_model,
     local_funasr_model,
 )
-from cc_cover.models import Candidate, Fingerprint, PipelineOptions, Segment
+from cc_cover.models import Candidate, Fingerprint, Phase, PipelineOptions, Segment
 from cc_cover.pipeline import (
     PipelineError,
+    engine_phase,
     extract_filename_hotwords,
     load_hotwords,
     load_json,
@@ -111,11 +112,31 @@ class HotwordTests(unittest.TestCase):
         self.assertEqual(load_hotwords(hotwords_options(), []), [])
 
     def test_load_hotwords_raises_when_user_file_missing(self) -> None:
-        with self.assertRaises(PipelineError):
+        with self.assertRaises(PipelineError) as caught:
             load_hotwords(hotwords_options(Path("missing-hotwords.txt")), [])
+
+        self.assertEqual(caught.exception.phase, Phase.SETUP)
 
 
 class PipelineHelperTests(unittest.TestCase):
+    def test_pipeline_error_requires_phase(self) -> None:
+        with self.assertRaises(TypeError):
+            PipelineError("message")  # type: ignore[call-arg]
+
+    def test_pipeline_error_carries_the_given_phase(self) -> None:
+        error = PipelineError("message", phase=Phase.WRITEBACK)
+
+        self.assertEqual(error.phase, Phase.WRITEBACK)
+
+    def test_load_json_missing_file_carries_given_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing.json"
+
+            with self.assertRaises(PipelineError) as caught:
+                load_json(missing, phase=Phase.VERIFY)
+
+        self.assertEqual(caught.exception.phase, Phase.VERIFY)
+
     def test_atomic_write_replaces_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "nested" / "subtitle.txt"
@@ -175,7 +196,7 @@ class PipelineHelperTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as temporary:
                 cache = Path(temporary) / "model-cache"
-                configure_model_cache(cache)
+                configure_model_cache(cache, phase=Phase.FUNASR)
                 expected = cache / "funasr" / ".runtime-temp"
                 self.assertTrue(expected.is_dir())
                 for name in environment_names:
@@ -211,6 +232,18 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertIn("start_ms=1000", message)
         self.assertIn("end_ms=1000", message)
         self.assertIn("duration_ms=10000", message)
+        self.assertEqual(caught.exception.phase, Phase.FASTER_WHISPER)
+
+    def test_validate_segments_funasr_error_carries_funasr_phase(self) -> None:
+        with self.assertRaises(PipelineError) as caught:
+            validate_segments([], 10.0, engine="funasr")
+
+        self.assertEqual(caught.exception.phase, Phase.FUNASR)
+
+    def test_engine_phase_normalizes_hyphen_and_underscore(self) -> None:
+        self.assertEqual(engine_phase("funasr"), Phase.FUNASR)
+        self.assertEqual(engine_phase("faster_whisper"), Phase.FASTER_WHISPER)
+        self.assertEqual(engine_phase("faster-whisper"), Phase.FASTER_WHISPER)
 
     def test_create_manifest_records_excluded_videos(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -243,7 +276,7 @@ class PipelineHelperTests(unittest.TestCase):
                 filtered,
                 excluded_videos=skipped,
             )
-            manifest = load_json(pipeline.run_dir / "manifest.json")
+            manifest = load_json(pipeline.run_dir / "manifest.json", phase=Phase.SETUP)
 
         self.assertEqual(len(manifest["candidates"]), 1)
         self.assertEqual(

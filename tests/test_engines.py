@@ -7,11 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from cc_cover.engines import (
+    EngineError,
     FasterWhisperEngine,
     parse_ffmpeg_duration,
     probe_duration,
+    resolve_device,
 )
-from cc_cover.models import PipelineOptions
+from cc_cover.models import Phase, PipelineOptions
 
 
 def raw_segment(start: float, end: float, text: str = "hello") -> SimpleNamespace:
@@ -127,6 +129,18 @@ class FasterWhisperEngineTests(unittest.TestCase):
         self.assertEqual(segments[0].metadata["avg_logprob"], -0.5)
         self.assertEqual(segments[0].metadata["no_speech_prob"], 0.01)
         self.assertEqual(segments[0].metadata["compression_ratio"], 1.0)
+
+
+class EngineErrorPhaseTests(unittest.TestCase):
+    def test_engine_error_requires_phase(self) -> None:
+        with self.assertRaises(TypeError):
+            EngineError("message")  # type: ignore[call-arg]
+
+    def test_resolve_device_rejects_unknown_choice_with_setup_phase(self) -> None:
+        with self.assertRaises(EngineError) as caught:
+            resolve_device("quantum", "auto")
+
+        self.assertEqual(caught.exception.phase, Phase.SETUP)
 
 
 class DurationProbeTests(unittest.TestCase):

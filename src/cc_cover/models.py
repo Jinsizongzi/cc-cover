@@ -1,8 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
+
+
+class Phase(str, Enum):
+    """流水线失败发生在哪个处理环节；不含 scan——扫描阶段的错误是 DiscoveryError。"""
+
+    SETUP = "setup"
+    AUDIO_EXTRACT = "audio_extract"
+    FUNASR = "funasr"
+    FASTER_WHISPER = "faster_whisper"
+    QUALITY_GATE = "quality_gate"
+    WRITEBACK = "writeback"
+    VERIFY = "verify"
 
 
 @dataclass(frozen=True)
