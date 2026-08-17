@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from cc_cover.models import Event, event_from_dict
+
 
 APP_DATA_DIRECTORY = "CC-Cover"
 SETTINGS_FILENAME = "settings.json"
@@ -177,6 +179,24 @@ def resolve_default_device(saved: str, detected: str | None) -> str:
     if saved in GUI_DEVICE_CHOICES:
         return saved
     return detected if detected in GUI_DEVICE_CHOICES else "cpu"
+
+
+def parse_event_line(line: str) -> Event | str:
+    """判断子进程输出的一行是结构化事件还是人读文字，是事件则解码。
+
+    判据：该行能 json.loads 成功，且顶层对象带 "event" 键；否则（包括语法
+    合法但没有 "event" 键的 JSON，以及未知 event 取值）一律原样返回该行。
+    """
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        return line
+    if not isinstance(payload, dict) or "event" not in payload:
+        return line
+    try:
+        return event_from_dict(payload)
+    except (KeyError, TypeError, ValueError):
+        return line
 
 
 RUN_DIR_PATTERN = re.compile(r"^运行目录：\s*(.+?)\s*$", re.MULTILINE)

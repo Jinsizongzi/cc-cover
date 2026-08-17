@@ -44,6 +44,10 @@ class EngineStartEvent:
     def to_dict(self) -> dict[str, Any]:
         return {"event": self.kind.value, "engine": self.engine, "device": self.device}
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "EngineStartEvent":
+        return cls(engine=str(value["engine"]), device=str(value["device"]))
+
 
 @dataclass(frozen=True)
 class ProgressEvent:
@@ -64,6 +68,15 @@ class ProgressEvent:
             "video_path": self.video_path,
         }
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ProgressEvent":
+        return cls(
+            engine=str(value["engine"]),
+            index=int(value["index"]),
+            total=int(value["total"]),
+            video_path=str(value["video_path"]),
+        )
+
 
 @dataclass(frozen=True)
 class RunDirEvent:
@@ -75,6 +88,10 @@ class RunDirEvent:
     def to_dict(self) -> dict[str, Any]:
         return {"event": self.kind.value, "path": self.path}
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "RunDirEvent":
+        return cls(path=str(value["path"]))
+
 
 @dataclass(frozen=True)
 class DoneEvent:
@@ -85,6 +102,10 @@ class DoneEvent:
 
     def to_dict(self) -> dict[str, Any]:
         return {"event": self.kind.value, "run_dir": self.run_dir}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DoneEvent":
+        return cls(run_dir=str(value["run_dir"]))
 
 
 @dataclass(frozen=True)
@@ -106,9 +127,38 @@ class ErrorEvent:
             "sample_id": self.sample_id,
         }
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ErrorEvent":
+        return cls(
+            phase=Phase(str(value["phase"])),
+            reason=str(value["reason"]),
+            video_path=(
+                None if value.get("video_path") is None else str(value["video_path"])
+            ),
+            sample_id=(
+                None if value.get("sample_id") is None else str(value["sample_id"])
+            ),
+        )
+
 
 Event = EngineStartEvent | ProgressEvent | RunDirEvent | DoneEvent | ErrorEvent
 """共享的事件 schema，生产者 pipeline.py（#67）/cli.py（#68），消费者 gui_support.py（#69）。"""
+
+_EVENT_DECODERS: Mapping[str, Any] = {
+    EventKind.ENGINE_START.value: EngineStartEvent.from_dict,
+    EventKind.PROGRESS.value: ProgressEvent.from_dict,
+    EventKind.RUN_DIR.value: RunDirEvent.from_dict,
+    EventKind.DONE.value: DoneEvent.from_dict,
+    EventKind.ERROR.value: ErrorEvent.from_dict,
+}
+
+
+def event_from_dict(value: Mapping[str, Any]) -> Event:
+    """按 "event" 字段分发到对应 Event 子类型；kind 未知或字段不全时抛 ValueError/KeyError。"""
+    decoder = _EVENT_DECODERS.get(value.get("event"))
+    if decoder is None:
+        raise ValueError(f"未知事件种类：{value.get('event')!r}")
+    return decoder(value)
 
 
 @dataclass(frozen=True)

@@ -15,10 +15,19 @@ from cc_cover.gui_support import (
     failure_info,
     failure_info_from_command,
     first_failed_sample,
+    parse_event_line,
     run_dir_from_output,
     run_is_resumable,
     stopped_message,
     terminate_process_tree,
+)
+from cc_cover.models import (
+    DoneEvent,
+    EngineStartEvent,
+    ErrorEvent,
+    Phase,
+    ProgressEvent,
+    RunDirEvent,
 )
 
 
@@ -275,6 +284,92 @@ class StoppedMessageTests(unittest.TestCase):
             stopped_message(info),
             "任务已停止，未产生可恢复的运行产物。",
         )
+
+
+class ParseEventLineTests(unittest.TestCase):
+    def test_decodes_engine_start_event(self) -> None:
+        line = json.dumps({"event": "engine_start", "engine": "funasr", "device": "cuda"})
+
+        self.assertEqual(
+            parse_event_line(line), EngineStartEvent(engine="funasr", device="cuda")
+        )
+
+    def test_decodes_progress_event(self) -> None:
+        line = json.dumps(
+            {
+                "event": "progress",
+                "engine": "faster_whisper",
+                "index": 2,
+                "total": 5,
+                "video_path": "a.mp4",
+            }
+        )
+
+        self.assertEqual(
+            parse_event_line(line),
+            ProgressEvent(engine="faster_whisper", index=2, total=5, video_path="a.mp4"),
+        )
+
+    def test_decodes_run_dir_event(self) -> None:
+        line = json.dumps({"event": "run_dir", "path": "C:\\runs\\a"})
+
+        self.assertEqual(parse_event_line(line), RunDirEvent(path="C:\\runs\\a"))
+
+    def test_decodes_done_event(self) -> None:
+        line = json.dumps({"event": "done", "run_dir": "C:\\runs\\a"})
+
+        self.assertEqual(parse_event_line(line), DoneEvent(run_dir="C:\\runs\\a"))
+
+    def test_decodes_error_event_with_optional_fields(self) -> None:
+        line = json.dumps(
+            {
+                "event": "error",
+                "phase": "writeback",
+                "reason": "写回后内容不一致：a.txt",
+                "video_path": "E:/videos/a.mp4",
+                "sample_id": "CC-MISSING-00047",
+            }
+        )
+
+        self.assertEqual(
+            parse_event_line(line),
+            ErrorEvent(
+                phase=Phase.WRITEBACK,
+                reason="写回后内容不一致：a.txt",
+                video_path="E:/videos/a.mp4",
+                sample_id="CC-MISSING-00047",
+            ),
+        )
+
+    def test_decodes_error_event_without_optional_fields(self) -> None:
+        line = json.dumps({"event": "error", "phase": "setup", "reason": "找不到 FFmpeg"})
+
+        self.assertEqual(
+            parse_event_line(line),
+            ErrorEvent(phase=Phase.SETUP, reason="找不到 FFmpeg"),
+        )
+
+    def test_plain_human_text_passes_through_unchanged(self) -> None:
+        line = "[funasr 1/2] E:\\videos\\a.mp4"
+
+        self.assertEqual(parse_event_line(line), line)
+
+    def test_valid_json_without_event_key_is_plain_text(self) -> None:
+        line = json.dumps({"foo": "bar"})
+
+        self.assertEqual(parse_event_line(line), line)
+
+    def test_unknown_event_kind_falls_back_to_plain_text(self) -> None:
+        line = json.dumps({"event": "future_kind", "value": 1})
+
+        self.assertEqual(parse_event_line(line), line)
+
+    def test_known_event_kind_missing_required_field_falls_back_to_plain_text(
+        self,
+    ) -> None:
+        line = json.dumps({"event": "progress", "engine": "funasr"})
+
+        self.assertEqual(parse_event_line(line), line)
 
 
 class TerminateProcessTreeTests(unittest.TestCase):
