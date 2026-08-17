@@ -14,7 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from cc_cover.models import Event, event_from_dict
+from cc_cover.models import (
+    ErrorEvent,
+    Event,
+    Phase,
+    ProgressEvent,
+    RunDirEvent,
+    event_from_dict,
+)
 
 
 APP_DATA_DIRECTORY = "CC-Cover"
@@ -199,22 +206,13 @@ def parse_event_line(line: str) -> Event | str:
         return line
 
 
-RUN_DIR_PATTERN = re.compile(r"^运行目录：\s*(.+?)\s*$", re.MULTILINE)
-ERROR_LINE_PATTERN = re.compile(r"^错误：\s*(.+)$", re.MULTILINE)
-PROGRESS_PATTERN = re.compile(
-    r"^\[[A-Za-z_\-]+\s+(\d+)/(\d+)\]\s*(.*)$", re.MULTILINE
-)
-PROGRESS_ENGINE_PATTERN = re.compile(
-    r"^\[([A-Za-z_\-]+)\s+\d+/\d+\]\s*(.*)$", re.MULTILINE
-)
-VIDEO_PATH_PATTERN = re.compile(
-    r"((?:[A-Za-z]:[\\/]|[\\/])[^\s,，）)\]]+\.(?:mp4|mkv|avi|mov|wmv|flv|webm|m4v|ts|m2ts|mts|ogv|mpg|mpeg|3gp|rmvb|rm|vob|asf|f4v|divx))",
-    re.IGNORECASE,
-)
-ENGINE_VIDEO_PATTERN = re.compile(r"video=([^,\s]+)")
-
-
 def detect_stage(reason: str, fallback: str) -> str:
+    """纯文本兜底：没有收到结构化 error 事件时，从错误文字里粗略猜阶段。
+
+    典型触发场景：用户点「停止」，CLI 进程被硬杀，来不及吐出任何结构化
+    事件；以及 install/环境检查这类本就不产出 JSON 事件的路径。收到结构化
+    error 事件时优先用 phase_stage_label()，不经过这里。
+    """
     if not reason:
         return fallback
     if "质量门禁" in reason:
@@ -232,23 +230,6 @@ def detect_stage(reason: str, fallback: str) -> str:
     return fallback
 
 
-def extract_file(output: str, reason: str) -> str | None:
-    progress_file: str | None = None
-    for match in PROGRESS_PATTERN.finditer(output):
-        file_path = match.group(3).strip()
-        if file_path:
-            progress_file = file_path
-    if progress_file:
-        return progress_file
-    match = ENGINE_VIDEO_PATTERN.search(reason)
-    if match:
-        return match.group(1).strip()
-    match = VIDEO_PATH_PATTERN.search(reason)
-    if match:
-        return match.group(1).strip()
-    return None
-
-
 def failure_info(
     output: str,
     *,
@@ -256,39 +237,81 @@ def failure_info(
     reason: str | None = None,
     run_dir: Path | None = None,
 ) -> FailureInfo:
-    """从子进程输出解析失败对话框需要的信息。"""
+    """纯文本兜底：没有显式 reason 就把全部输出截断当 reason。
+
+    服务不产出结构化事件的路径（install/环境检查、扫描）。转写/继续中断
+    任务改由 failure_info_from_run() 优先从结构化 error 事件构造，只在
+    没有捕获到结构化事件时才落回这里。
+    """
     text = output or ""
     if reason is None:
-        error_lines = ERROR_LINE_PATTERN.findall(text)
-        reason = error_lines[-1].strip() if error_lines else text.strip()
+        reason = text.strip()
         if len(reason) > 1200:
             reason = reason[-1200:]
-    run_dir_match = RUN_DIR_PATTERN.search(text)
-    resolved_run_dir = (
-        run_dir
-        if run_dir is not None
-        else (Path(run_dir_match.group(1)) if run_dir_match else None)
-    )
-    progress_matches = list(PROGRESS_PATTERN.finditer(text))
-    done_count = total_count = None
-    if progress_matches:
-        last = progress_matches[-1]
-        done_count = int(last.group(1))
-        total_count = int(last.group(2))
     return FailureInfo(
         stage=detect_stage(reason, fallback_stage),
         reason=reason,
-        file=extract_file(text, reason),
-        run_dir=resolved_run_dir,
-        done_count=done_count,
-        total_count=total_count,
+        file=None,
+        run_dir=run_dir,
+        done_count=None,
+        total_count=None,
     )
 
 
-def run_dir_from_output(output: str) -> Path | None:
-    """从 CLI 输出解析运行目录；取最后一个「运行目录：」匹配。"""
-    matches = RUN_DIR_PATTERN.findall(output or "")
-    return Path(matches[-1]) if matches else None
+def captured_events(output: str) -> list[Event]:
+    """解析已收集输出的每一行，按原有顺序返回其中成功解码的结构化事件。"""
+    events: list[Event] = []
+    for line in (output or "").splitlines():
+        parsed = parse_event_line(line)
+        if not isinstance(parsed, str):
+            events.append(parsed)
+    return events
+
+
+def run_dir_from_events(output: str) -> Path | None:
+    """从已收集输出的结构化事件里取运行目录；取最后一个 run_dir 事件。"""
+    resolved: Path | None = None
+    for event in captured_events(output):
+        if isinstance(event, RunDirEvent):
+            resolved = Path(event.path)
+    return resolved
+
+
+def last_error_event(output: str) -> ErrorEvent | None:
+    """从已收集输出的结构化事件里取最后一个 error 事件；没有则返回 None。"""
+    last: ErrorEvent | None = None
+    for event in captured_events(output):
+        if isinstance(event, ErrorEvent):
+            last = event
+    return last
+
+
+def last_progress_counts(output: str) -> tuple[int, int] | None:
+    """从已收集输出的结构化事件里取最后一个 progress 事件的（第几个, 共几个）。"""
+    last: ProgressEvent | None = None
+    for event in captured_events(output):
+        if isinstance(event, ProgressEvent):
+            last = event
+    return (last.index, last.total) if last is not None else None
+
+
+_PHASE_STAGE_LABELS: Mapping[Phase, str] = {
+    Phase.AUDIO_EXTRACT: "音频提取",
+    Phase.FUNASR: "FunASR 转写",
+    Phase.FASTER_WHISPER: "faster-whisper 转写",
+    Phase.QUALITY_GATE: "质量门禁",
+    Phase.WRITEBACK: "写回",
+    Phase.VERIFY: "写回",
+}
+
+
+def phase_stage_label(phase: Phase, fallback: str) -> str:
+    """结构化 error 事件的 phase 到失败对话框「阶段」文案。
+
+    setup 没有比 fallback 更具体的既有标签（既有 detect_stage() 也是这样
+    处理无法归类的原因文字的），沿用 fallback。
+    """
+    return _PHASE_STAGE_LABELS.get(phase, fallback)
 
 
 def failure_info_from_command(
@@ -304,6 +327,36 @@ def failure_info_from_command(
     if message:
         output = output.rstrip("\n") + "\n" + message
     return failure_info(output, fallback_stage=fallback_stage, run_dir=run_dir)
+
+
+def failure_info_from_run(
+    chunks: Sequence[str],
+    exc: BaseException,
+    *,
+    fallback_stage: str,
+    run_dir: Path | None = None,
+) -> FailureInfo:
+    """转写/继续中断任务失败或停止时构造失败对话框信息。
+
+    优先用已收集输出里最后一个结构化 error 事件直接构造；没有捕获到
+    结构化事件时（典型场景：用户点「停止」，CLI 进程被硬杀，来不及吐出
+    任何结构化事件）落回 failure_info_from_command() 的纯文本兜底。
+    """
+    output = "".join(chunks)
+    error_event = last_error_event(output)
+    if error_event is None:
+        return failure_info_from_command(
+            chunks, exc, fallback_stage=fallback_stage, run_dir=run_dir
+        )
+    counts = last_progress_counts(output)
+    return FailureInfo(
+        stage=phase_stage_label(error_event.phase, fallback_stage),
+        reason=error_event.reason,
+        file=error_event.video_path,
+        run_dir=run_dir if run_dir is not None else run_dir_from_events(output),
+        done_count=counts[0] if counts else None,
+        total_count=counts[1] if counts else None,
+    )
 
 
 def first_failed_sample(run_dir: Path | None) -> tuple[str, str] | None:
@@ -517,11 +570,11 @@ class ProgressSnapshot:
 
 
 class ProgressTracker:
-    """解析转写进度行，跟踪「第 N / 共 M 个」与耗时/粗估剩余时间。
+    """跟踪结构化 progress 事件，得到「第 N / 共 M 个」与耗时/粗估剩余时间。
 
-    进度行形如 ``[funasr 2/5] <视频路径>``，每个视频在双模型（funasr /
-    faster_whisper）各打印一行；一个文件两行都出现才计为完成，百分比因此反映
-    真实的转写完成度，而不是“已开始”。剩余时间按「平均耗时 × 剩余数」粗估。
+    每个视频在双模型（funasr / faster_whisper）各产出一个 progress 事件；
+    一个文件两个引擎都出现过才计为完成，百分比因此反映真实的转写完成度，
+    而不是"已开始"。剩余时间按「平均耗时 × 剩余数」粗估。
     """
 
     _ENGINES = ("funasr", "faster_whisper")
@@ -531,14 +584,10 @@ class ProgressTracker:
         self.started_at = float(started_at)
         self._engines_by_path: dict[str, set[str]] = {}
 
-    def on_progress_line(self, line: str) -> None:
-        match = PROGRESS_ENGINE_PATTERN.search(line)
-        if match is None:
+    def on_event(self, event: Event | str) -> None:
+        if not isinstance(event, ProgressEvent):
             return
-        engine = match.group(1)
-        path = match.group(2).strip()
-        if path:
-            self._engines_by_path.setdefault(path, set()).add(engine)
+        self._engines_by_path.setdefault(event.video_path, set()).add(event.engine)
 
     def _completed_count(self) -> int:
         required = set(self._ENGINES)

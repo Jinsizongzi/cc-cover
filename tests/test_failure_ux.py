@@ -10,13 +10,18 @@ from pathlib import Path
 
 from cc_cover.gui_support import (
     FailureInfo,
+    captured_events,
     detect_stage,
     error_text,
     failure_info,
     failure_info_from_command,
+    failure_info_from_run,
     first_failed_sample,
+    last_error_event,
+    last_progress_counts,
     parse_event_line,
-    run_dir_from_output,
+    phase_stage_label,
+    run_dir_from_events,
     run_is_resumable,
     stopped_message,
     terminate_process_tree,
@@ -32,87 +37,33 @@ from cc_cover.models import (
 
 
 class FailureInfoTests(unittest.TestCase):
-    def test_command_failure_output_feeds_dialog_fields(self) -> None:
-        exc = RuntimeError(
-            "运行目录：C:\\runs\\20260802_010203_12345\n"
-            "[faster_whisper 44/66] E:\\videos\\47_skills实操.mp4\n"
-            "错误：引擎字幕段无效：#20 (engine=faster-whisper, "
-            "sample=CC-CANDIDATE-00047, video=E:\\videos\\47_skills实操.mp4, "
-            "duration_ms=600000, start_ms=12000, end_ms=11000)"
-        )
-
-        info = failure_info_from_command(
-            [], exc, fallback_stage="转写与写回"
-        )
-
-        self.assertEqual(info.stage, "faster-whisper 转写")
-        self.assertEqual(info.file, "E:\\videos\\47_skills实操.mp4")
-        self.assertEqual(
-            info.run_dir, Path("C:\\runs\\20260802_010203_12345")
-        )
-        self.assertEqual(info.done_count, 44)
-        self.assertEqual(info.total_count, 66)
-        self.assertIn("引擎字幕段无效", info.reason)
-
     def test_command_failure_info_combines_chunks_with_exception(self) -> None:
         info = failure_info_from_command(
-            ["运行目录：C:\\runs\\a\n"],
+            ["开始安装运行环境。此过程可能需要较长时间。\n"],
             RuntimeError("错误：安装组件超时"),
             fallback_stage="安装运行环境",
         )
 
-        self.assertEqual(info.run_dir, Path("C:\\runs\\a"))
-        self.assertEqual(info.reason, "安装组件超时")
-
-    def test_parses_run_dir_with_spaces_and_last_progress(self) -> None:
-        output = (
-            "运行目录：C:\\Users\\me\\AppData\\Local\\CC-Cover\\runs\\20260802_010203_12345\n"
-            "[funasr 44/66] F:\\LLM\\Vibe Coding\\47_skills实操.mp4\n"
-            "[funasr 45/66] F:\\LLM\\Vibe Coding\\48_总结.mp4\n"
-        )
-
-        info = failure_info(output, fallback_stage="转写与写回")
-
+        self.assertIsNone(info.run_dir)
         self.assertEqual(
-            info.run_dir,
-            Path("C:\\Users\\me\\AppData\\Local\\CC-Cover\\runs\\20260802_010203_12345"),
-        )
-        self.assertEqual(info.done_count, 45)
-        self.assertEqual(info.total_count, 66)
-        self.assertEqual(info.file, "F:\\LLM\\Vibe Coding\\48_总结.mp4")
-        self.assertEqual(info.stage, "转写与写回")
-        self.assertEqual(info.reason, output.strip())
-
-    def test_parses_file_stage_and_reason_from_engine_error(self) -> None:
-        output = (
-            "运行目录：C:\\runs\\20260802_010203_12345\n"
-            "[faster_whisper 3/10] E:\\videos\\47_skills实操.mp4\n"
-            "错误：引擎字幕段无效：#20 (engine=faster-whisper, "
-            "sample=CC-CANDIDATE-00047, video=E:\\videos\\47_skills实操.mp4, "
-            "duration_ms=600000, start_ms=12000, end_ms=11000)\n"
+            info.reason,
+            "开始安装运行环境。此过程可能需要较长时间。\n错误：安装组件超时",
         )
 
-        info = failure_info(output, fallback_stage="转写与写回")
-
-        self.assertEqual(info.stage, "faster-whisper 转写")
-        self.assertEqual(info.file, "E:\\videos\\47_skills实操.mp4")
-        self.assertIn("引擎字幕段无效", info.reason)
-        self.assertEqual(info.run_dir, Path("C:\\runs\\20260802_010203_12345"))
-
-    def test_audio_extraction_failure_names_file_and_stage(self) -> None:
+    def test_audio_extraction_failure_stage_still_detected_without_file(self) -> None:
         info = failure_info(
             "错误：音频提取失败：E:\\videos\\broken.mp4: invalid data",
             fallback_stage="转写与写回",
         )
 
         self.assertEqual(info.stage, "音频提取")
-        self.assertEqual(info.file, "E:\\videos\\broken.mp4")
+        self.assertIsNone(info.file)
 
     def test_fallback_stage_used_when_reason_has_no_hints(self) -> None:
         info = failure_info("错误：磁盘已满", fallback_stage="写回")
 
         self.assertEqual(info.stage, "写回")
-        self.assertEqual(info.reason, "磁盘已满")
+        self.assertEqual(info.reason, "错误：磁盘已满")
         self.assertIsNone(info.file)
         self.assertIsNone(info.run_dir)
 
@@ -214,20 +165,179 @@ class ResumeabilityTests(unittest.TestCase):
             self.assertFalse(run_is_resumable(run_dir))
 
 
-class RunDirFromOutputTests(unittest.TestCase):
-    def test_returns_last_run_dir_match(self) -> None:
+class CapturedEventsTests(unittest.TestCase):
+    def test_extracts_structured_events_in_order_and_skips_plain_text(self) -> None:
         output = (
             "运行目录：C:\\runs\\a\n"
-            "[funasr 1/2] E:\\videos\\a.mp4\n"
-            "运行目录：C:\\runs\\b\n"
-            "字幕已写回并复核通过：C:\\runs\\b\n"
+            + json.dumps(RunDirEvent(path="C:\\runs\\a").to_dict())
+            + "\n"
+            + json.dumps(
+                ProgressEvent(
+                    engine="funasr", index=1, total=2, video_path="a.mp4"
+                ).to_dict()
+            )
+            + "\n"
         )
 
-        self.assertEqual(run_dir_from_output(output), Path("C:\\runs\\b"))
+        self.assertEqual(
+            captured_events(output),
+            [
+                RunDirEvent(path="C:\\runs\\a"),
+                ProgressEvent(engine="funasr", index=1, total=2, video_path="a.mp4"),
+            ],
+        )
 
-    def test_returns_none_without_run_dir_line(self) -> None:
-        self.assertIsNone(run_dir_from_output("没有运行目录"))
-        self.assertIsNone(run_dir_from_output(""))
+    def test_empty_output_yields_no_events(self) -> None:
+        self.assertEqual(captured_events(""), [])
+
+
+class RunDirFromEventsTests(unittest.TestCase):
+    def test_returns_last_run_dir_event(self) -> None:
+        output = (
+            json.dumps(RunDirEvent(path="C:\\runs\\a").to_dict())
+            + "\n[funasr 1/2] E:\\videos\\a.mp4\n"
+            + json.dumps(RunDirEvent(path="C:\\runs\\b").to_dict())
+            + "\n字幕已写回并复核通过：C:\\runs\\b\n"
+        )
+
+        self.assertEqual(run_dir_from_events(output), Path("C:\\runs\\b"))
+
+    def test_returns_none_without_run_dir_event(self) -> None:
+        self.assertIsNone(run_dir_from_events("没有运行目录"))
+        self.assertIsNone(run_dir_from_events(""))
+
+
+class LastErrorEventTests(unittest.TestCase):
+    def test_returns_last_error_event(self) -> None:
+        output = (
+            json.dumps(ErrorEvent(phase=Phase.FUNASR, reason="第一次失败").to_dict())
+            + "\n"
+            + json.dumps(
+                ErrorEvent(
+                    phase=Phase.WRITEBACK,
+                    reason="第二次失败",
+                    video_path="E:/a.mp4",
+                    sample_id="s1",
+                ).to_dict()
+            )
+        )
+
+        event = last_error_event(output)
+
+        assert event is not None
+        self.assertEqual(event.phase, Phase.WRITEBACK)
+        self.assertEqual(event.reason, "第二次失败")
+        self.assertEqual(event.video_path, "E:/a.mp4")
+        self.assertEqual(event.sample_id, "s1")
+
+    def test_returns_none_without_error_event(self) -> None:
+        self.assertIsNone(last_error_event("普通输出，没有错误"))
+
+
+class LastProgressCountsTests(unittest.TestCase):
+    def test_returns_last_progress_event_counts(self) -> None:
+        output = "\n".join(
+            json.dumps(
+                ProgressEvent(
+                    engine="funasr", index=index, total=5, video_path=f"{index}.mp4"
+                ).to_dict()
+            )
+            for index in (1, 2, 3)
+        )
+
+        self.assertEqual(last_progress_counts(output), (3, 5))
+
+    def test_returns_none_without_progress_event(self) -> None:
+        self.assertIsNone(last_progress_counts("普通输出"))
+
+
+class PhaseStageLabelTests(unittest.TestCase):
+    def test_known_phases_map_to_existing_stage_labels(self) -> None:
+        cases = {
+            Phase.AUDIO_EXTRACT: "音频提取",
+            Phase.FUNASR: "FunASR 转写",
+            Phase.FASTER_WHISPER: "faster-whisper 转写",
+            Phase.QUALITY_GATE: "质量门禁",
+            Phase.WRITEBACK: "写回",
+            Phase.VERIFY: "写回",
+        }
+        for phase, label in cases.items():
+            with self.subTest(phase=phase):
+                self.assertEqual(phase_stage_label(phase, "兜底"), label)
+
+    def test_setup_falls_back_without_a_dedicated_label(self) -> None:
+        self.assertEqual(phase_stage_label(Phase.SETUP, "转写与写回"), "转写与写回")
+
+
+class FailureInfoFromRunTests(unittest.TestCase):
+    def test_builds_directly_from_captured_error_event(self) -> None:
+        chunks = [
+            json.dumps(RunDirEvent(path="C:\\runs\\a").to_dict()) + "\n",
+            "[faster_whisper 3/10] E:\\videos\\47_skills实操.mp4\n",
+            json.dumps(
+                ProgressEvent(
+                    engine="faster_whisper",
+                    index=3,
+                    total=10,
+                    video_path="E:\\videos\\47_skills实操.mp4",
+                ).to_dict()
+            )
+            + "\n",
+            json.dumps(
+                ErrorEvent(
+                    phase=Phase.FASTER_WHISPER,
+                    reason="引擎字幕段无效：#20",
+                    video_path="E:\\videos\\47_skills实操.mp4",
+                    sample_id="CC-CANDIDATE-00047",
+                ).to_dict()
+            )
+            + "\n",
+        ]
+
+        info = failure_info_from_run(
+            chunks,
+            RuntimeError("任务执行失败，退出代码：1"),
+            fallback_stage="转写与写回",
+        )
+
+        self.assertEqual(info.stage, "faster-whisper 转写")
+        self.assertEqual(info.reason, "引擎字幕段无效：#20")
+        self.assertEqual(info.file, "E:\\videos\\47_skills实操.mp4")
+        self.assertEqual(info.run_dir, Path("C:\\runs\\a"))
+        self.assertEqual(info.done_count, 3)
+        self.assertEqual(info.total_count, 10)
+
+    def test_explicit_run_dir_wins_over_captured_run_dir_event(self) -> None:
+        chunks = [
+            json.dumps(RunDirEvent(path="C:\\runs\\a").to_dict()) + "\n",
+            json.dumps(
+                ErrorEvent(phase=Phase.WRITEBACK, reason="写回失败").to_dict()
+            )
+            + "\n",
+        ]
+
+        info = failure_info_from_run(
+            chunks,
+            RuntimeError(""),
+            fallback_stage="继续中断任务",
+            run_dir=Path("C:\\runs\\b"),
+        )
+
+        self.assertEqual(info.run_dir, Path("C:\\runs\\b"))
+
+    def test_falls_back_to_plain_text_when_process_was_hard_killed(self) -> None:
+        # 典型场景：用户点「停止」，CLI 进程被硬杀，来不及吐出任何结构化事件。
+        chunks = ["运行目录：C:\\runs\\a\n[funasr 1/2] E:\\videos\\a.mp4\n"]
+
+        info = failure_info_from_run(
+            chunks,
+            RuntimeError("任务已由用户停止。"),
+            fallback_stage="转写与写回",
+        )
+
+        self.assertIsNone(info.file)
+        self.assertIsNone(info.run_dir)
+        self.assertIn("任务已由用户停止", info.reason)
 
 
 class ErrorTextTests(unittest.TestCase):

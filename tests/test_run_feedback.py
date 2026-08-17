@@ -14,16 +14,21 @@ from cc_cover.gui_support import (
     scan_confirmation_stats,
     should_play_completion_sound,
 )
+from cc_cover.models import DoneEvent, EngineStartEvent, ProgressEvent, RunDirEvent
 from cc_cover.pipeline import CompletionStats, run_completion_stats
+
+
+def _progress(engine: str, index: int, total: int, video_path: str) -> ProgressEvent:
+    return ProgressEvent(engine=engine, index=index, total=total, video_path=video_path)
 
 
 class ProgressTrackerTests(unittest.TestCase):
     def test_counts_file_only_after_both_engine_lines(self) -> None:
         tracker = ProgressTracker(total=5)
-        tracker.on_progress_line("[funasr 1/2] C:\\videos\\a.mp4\n")
-        tracker.on_progress_line("[funasr 2/2] C:\\videos\\b.mp4\n")
+        tracker.on_event(_progress("funasr", 1, 2, "C:\\videos\\a.mp4"))
+        tracker.on_event(_progress("funasr", 2, 2, "C:\\videos\\b.mp4"))
         # a 已完成双模型，b 只出现一次 funasr，仍不算完成。
-        tracker.on_progress_line("[faster_whisper 1/2] C:\\videos\\a.mp4\n")
+        tracker.on_event(_progress("faster_whisper", 1, 2, "C:\\videos\\a.mp4"))
 
         snapshot = tracker.snapshot(now=100.0)
 
@@ -31,21 +36,19 @@ class ProgressTrackerTests(unittest.TestCase):
         self.assertEqual(snapshot.total, 5)
         self.assertEqual(snapshot.percent, 20)
 
-    def test_ignores_non_progress_lines(self) -> None:
+    def test_ignores_non_progress_events_and_plain_text(self) -> None:
         tracker = ProgressTracker(total=3)
-        for line in (
-            "运行目录：C:\\runs\\a\n",
-            "加载 funasr：device=cpu\n",
-            "字幕已写回并复核通过：C:\\runs\\a\n",
-        ):
-            tracker.on_progress_line(line)
+        tracker.on_event(RunDirEvent(path="C:\\runs\\a"))
+        tracker.on_event(EngineStartEvent(engine="funasr", device="cpu"))
+        tracker.on_event(DoneEvent(run_dir="C:\\runs\\a"))
+        tracker.on_event("普通人读文字，不是事件")
 
         self.assertEqual(tracker.snapshot(now=10.0).current, 0)
 
     def test_estimates_remaining_by_average_duration(self) -> None:
         tracker = ProgressTracker(total=10, started_at=0.0)
-        tracker.on_progress_line("[funasr 1/1] C:\\a.mp4")
-        tracker.on_progress_line("[faster_whisper 1/1] C:\\a.mp4")
+        tracker.on_event(_progress("funasr", 1, 1, "C:\\a.mp4"))
+        tracker.on_event(_progress("faster_whisper", 1, 1, "C:\\a.mp4"))
 
         snapshot = tracker.snapshot(now=100.0)
 
@@ -55,7 +58,7 @@ class ProgressTrackerTests(unittest.TestCase):
 
     def test_no_remaining_estimate_when_nothing_completed(self) -> None:
         tracker = ProgressTracker(total=10)
-        tracker.on_progress_line("[funasr 1/1] C:\\a.mp4")
+        tracker.on_event(_progress("funasr", 1, 1, "C:\\a.mp4"))
 
         snapshot = tracker.snapshot(now=50.0)
 
@@ -64,10 +67,10 @@ class ProgressTrackerTests(unittest.TestCase):
 
     def test_no_remaining_estimate_when_all_done(self) -> None:
         tracker = ProgressTracker(total=2)
-        tracker.on_progress_line("[funasr 1/2] C:\\a.mp4")
-        tracker.on_progress_line("[faster_whisper 1/2] C:\\a.mp4")
-        tracker.on_progress_line("[funasr 2/2] C:\\b.mp4")
-        tracker.on_progress_line("[faster_whisper 2/2] C:\\b.mp4")
+        tracker.on_event(_progress("funasr", 1, 2, "C:\\a.mp4"))
+        tracker.on_event(_progress("faster_whisper", 1, 2, "C:\\a.mp4"))
+        tracker.on_event(_progress("funasr", 2, 2, "C:\\b.mp4"))
+        tracker.on_event(_progress("faster_whisper", 2, 2, "C:\\b.mp4"))
 
         snapshot = tracker.snapshot(now=30.0)
 
@@ -76,8 +79,8 @@ class ProgressTrackerTests(unittest.TestCase):
 
     def test_percent_rounds_to_nearest_integer(self) -> None:
         tracker = ProgressTracker(total=3)
-        tracker.on_progress_line("[funasr 1/1] C:\\a.mp4")
-        tracker.on_progress_line("[faster_whisper 1/1] C:\\a.mp4")
+        tracker.on_event(_progress("funasr", 1, 1, "C:\\a.mp4"))
+        tracker.on_event(_progress("faster_whisper", 1, 1, "C:\\a.mp4"))
 
         self.assertEqual(tracker.snapshot(now=1.0).percent, 33)
 

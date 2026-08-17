@@ -44,6 +44,7 @@ from cc_cover.gui_support import (
     estimate_install_required_bytes,
     estimate_processing_seconds,
     failure_info_from_command,
+    failure_info_from_run,
     first_failed_sample,
     focus_existing_window,
     format_column_duration,
@@ -57,6 +58,7 @@ from cc_cover.gui_support import (
     load_gui_settings,
     local_data_usage,
     model_cache_cleanup_text,
+    parse_event_line,
     parsed_device,
     parsed_nvidia_probe,
     play_completion_sound,
@@ -65,7 +67,7 @@ from cc_cover.gui_support import (
     resume_command,
     resolve_data_root,
     resolve_default_device,
-    run_dir_from_output,
+    run_dir_from_events,
     run_is_resumable,
     runs_total_size,
     runtime_paths,
@@ -1221,7 +1223,7 @@ class CCCoverApp(ttk.Frame):
                         )
                     )
                 )
-                run_dir = run_dir_from_output(chunks[-1])
+                run_dir = run_dir_from_events(chunks[-1])
                 self.events.put(
                     (
                         "done",
@@ -1233,7 +1235,7 @@ class CCCoverApp(ttk.Frame):
                     )
                 )
             except TaskCancelled as exc:
-                info = failure_info_from_command(
+                info = failure_info_from_run(
                     chunks,
                     exc,
                     fallback_stage=("扫描" if scanning else "转写与写回"),
@@ -1246,7 +1248,7 @@ class CCCoverApp(ttk.Frame):
                         "error",
                         (
                             "字幕补全失败",
-                            failure_info_from_command(
+                            failure_info_from_run(
                                 chunks,
                                 exc,
                                 fallback_stage=(
@@ -1310,7 +1312,7 @@ class CCCoverApp(ttk.Frame):
                     )
                 )
             except TaskCancelled as exc:
-                info = failure_info_from_command(
+                info = failure_info_from_run(
                     chunks,
                     exc,
                     fallback_stage="继续中断任务",
@@ -1324,7 +1326,7 @@ class CCCoverApp(ttk.Frame):
                         "error",
                         (
                             "继续任务失败",
-                            failure_info_from_command(
+                            failure_info_from_run(
                                 chunks,
                                 exc,
                                 fallback_stage="继续中断任务",
@@ -1880,7 +1882,7 @@ class CCCoverApp(ttk.Frame):
             return
         if self._progress_tracker is None:
             return
-        self._progress_tracker.on_progress_line(line)
+        self._progress_tracker.on_event(parse_event_line(line))
         self._refresh_progress()
 
     def _clear_progress(self) -> None:
