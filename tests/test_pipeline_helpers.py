@@ -139,6 +139,19 @@ class PipelineHelperTests(unittest.TestCase):
         error = PipelineError("message", phase=Phase.WRITEBACK)
 
         self.assertEqual(error.phase, Phase.WRITEBACK)
+        self.assertIsNone(error.video_path)
+        self.assertIsNone(error.sample_id)
+
+    def test_pipeline_error_carries_video_path_and_sample_id_when_given(self) -> None:
+        error = PipelineError(
+            "message",
+            phase=Phase.WRITEBACK,
+            video_path="E:/videos/sample.mp4",
+            sample_id="CC-MISSING-00047",
+        )
+
+        self.assertEqual(error.video_path, "E:/videos/sample.mp4")
+        self.assertEqual(error.sample_id, "CC-MISSING-00047")
 
     def test_load_json_missing_file_carries_given_phase(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -245,6 +258,8 @@ class PipelineHelperTests(unittest.TestCase):
         self.assertIn("end_ms=1000", message)
         self.assertIn("duration_ms=10000", message)
         self.assertEqual(caught.exception.phase, Phase.FASTER_WHISPER)
+        self.assertEqual(caught.exception.sample_id, "CC-MISSING-00047")
+        self.assertEqual(caught.exception.video_path, "E:/videos/sample.mp4")
 
     def test_validate_segments_funasr_error_carries_funasr_phase(self) -> None:
         with self.assertRaises(PipelineError) as caught:

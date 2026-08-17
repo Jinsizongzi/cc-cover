@@ -28,6 +28,9 @@ class EventKind(str, Enum):
 
     ENGINE_START = "engine_start"
     PROGRESS = "progress"
+    RUN_DIR = "run_dir"
+    DONE = "done"
+    ERROR = "error"
 
 
 @dataclass(frozen=True)
@@ -62,8 +65,50 @@ class ProgressEvent:
         }
 
 
-Event = EngineStartEvent | ProgressEvent
-"""共享的事件 schema；#68 会在 cli.py 那一票里追加 RunDirEvent/DoneEvent/ErrorEvent。"""
+@dataclass(frozen=True)
+class RunDirEvent:
+    """对应 cli.py 里"运行目录：..."这一行。"""
+
+    path: str
+    kind: EventKind = field(default=EventKind.RUN_DIR, init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"event": self.kind.value, "path": self.path}
+
+
+@dataclass(frozen=True)
+class DoneEvent:
+    """对应 cli.py 里"字幕已写回并复核通过：..."/"复核通过，共 N 个..."这几行。"""
+
+    run_dir: str
+    kind: EventKind = field(default=EventKind.DONE, init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"event": self.kind.value, "run_dir": self.run_dir}
+
+
+@dataclass(frozen=True)
+class ErrorEvent:
+    """对应 cli.py 里 main() 捕获异常后打印"错误：..."这一行。"""
+
+    phase: Phase
+    reason: str
+    video_path: str | None = None
+    sample_id: str | None = None
+    kind: EventKind = field(default=EventKind.ERROR, init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event": self.kind.value,
+            "phase": self.phase.value,
+            "reason": self.reason,
+            "video_path": self.video_path,
+            "sample_id": self.sample_id,
+        }
+
+
+Event = EngineStartEvent | ProgressEvent | RunDirEvent | DoneEvent | ErrorEvent
+"""共享的事件 schema，生产者 pipeline.py（#67）/cli.py（#68），消费者 gui_support.py（#69）。"""
 
 
 @dataclass(frozen=True)

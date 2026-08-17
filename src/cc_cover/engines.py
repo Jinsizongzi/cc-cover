@@ -20,9 +20,18 @@ logger = logging.getLogger(__name__)
 
 
 class EngineError(RuntimeError):
-    def __init__(self, message: str, *, phase: Phase) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        phase: Phase,
+        video_path: str | None = None,
+        sample_id: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.phase = phase
+        self.video_path = video_path
+        self.sample_id = sample_id
 
 
 FUNASR_CACHE_NAMES = {
@@ -225,13 +234,16 @@ def extract_audio(ffmpeg: Path, video: Path, output_wav: Path) -> float:
         raise EngineError(
             f"音频提取失败：{video}: {completed.stderr.strip()}",
             phase=Phase.AUDIO_EXTRACT,
+            video_path=str(video),
         )
     with wave.open(str(output_wav), "rb") as handle:
         frames = handle.getnframes()
         frame_rate = handle.getframerate()
     if frames <= 0 or frame_rate <= 0:
         raise EngineError(
-            f"提取出的 WAV 无有效音频：{output_wav}", phase=Phase.AUDIO_EXTRACT
+            f"提取出的 WAV 无有效音频：{output_wav}",
+            phase=Phase.AUDIO_EXTRACT,
+            video_path=str(video),
         )
     return frames / frame_rate
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import unittest
 import wave
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 from cc_cover.engines import (
     EngineError,
     FasterWhisperEngine,
+    extract_audio,
     parse_ffmpeg_duration,
     probe_duration,
     resolve_device,
@@ -141,6 +143,34 @@ class EngineErrorPhaseTests(unittest.TestCase):
             resolve_device("quantum", "auto")
 
         self.assertEqual(caught.exception.phase, Phase.SETUP)
+        self.assertIsNone(caught.exception.video_path)
+        self.assertIsNone(caught.exception.sample_id)
+
+    def test_engine_error_carries_video_path_and_sample_id_when_given(self) -> None:
+        error = EngineError(
+            "message",
+            phase=Phase.FUNASR,
+            video_path="E:/videos/sample.mp4",
+            sample_id="CC-MISSING-00047",
+        )
+
+        self.assertEqual(error.video_path, "E:/videos/sample.mp4")
+        self.assertEqual(error.sample_id, "CC-MISSING-00047")
+
+
+class ExtractAudioTests(unittest.TestCase):
+    def test_extract_audio_failure_carries_video_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "lesson.mp4"
+            video.write_bytes(b"not a real video")
+            output_wav = root / "lesson.wav"
+
+            with self.assertRaises(EngineError) as caught:
+                extract_audio(Path(sys.executable), video, output_wav)
+
+        self.assertEqual(caught.exception.phase, Phase.AUDIO_EXTRACT)
+        self.assertEqual(caught.exception.video_path, str(video))
 
 
 class DurationProbeTests(unittest.TestCase):

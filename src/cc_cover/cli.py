@@ -11,11 +11,12 @@ from cc_cover import __version__
 from cc_cover.discovery import DiscoveryError, DiscoveryReport
 from cc_cover.engines import EngineError
 from cc_cover.formats import FormatError
-from cc_cover.models import PipelineOptions
+from cc_cover.models import DoneEvent, ErrorEvent, PipelineOptions, RunDirEvent
 from cc_cover.pipeline import (
     PipelineError,
     SubtitlePipeline,
     discover_for_options,
+    emit_event,
 )
 
 
@@ -295,8 +296,10 @@ def command_transcribe(arguments: argparse.Namespace) -> int:
         excluded_videos=sorted(path.resolve() for path in excluded),
     )
     print(f"运行目录：{pipeline.run_dir}")
+    emit_event(RunDirEvent(path=str(pipeline.run_dir)))
     pipeline.execute()
     print(f"字幕已写回并复核通过：{pipeline.run_dir}")
+    emit_event(DoneEvent(run_dir=str(pipeline.run_dir)))
     return 0
 
 
@@ -305,9 +308,11 @@ def command_resume(arguments: argparse.Namespace) -> int:
     if pipeline.manifest.get("status") == "committed":
         report = pipeline.verify()
         print(f"复核通过，共 {report['verified_count']} 个字幕文件。")
+        emit_event(DoneEvent(run_dir=str(pipeline.run_dir)))
         return 0
     pipeline.execute()
     print(f"字幕已写回并复核通过：{pipeline.run_dir}")
+    emit_event(DoneEvent(run_dir=str(pipeline.run_dir)))
     return 0
 
 
@@ -315,6 +320,7 @@ def command_verify(arguments: argparse.Namespace) -> int:
     pipeline = SubtitlePipeline.resume(arguments.run_dir)
     report = pipeline.verify()
     print(f"复核通过，共 {report['verified_count']} 个字幕文件。")
+    emit_event(DoneEvent(run_dir=str(pipeline.run_dir)))
     return 0
 
 
@@ -332,6 +338,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ConfigError(f"未知命令：{arguments.command}")
     except (ConfigError, DiscoveryError, EngineError, FormatError, PipelineError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
+        if isinstance(exc, (PipelineError, EngineError)):
+            emit_event(
+                ErrorEvent(
+                    phase=exc.phase,
+                    reason=str(exc),
+                    video_path=exc.video_path,
+                    sample_id=exc.sample_id,
+                )
+            )
         return 1
     except KeyboardInterrupt:
         print("已取消。运行产物可通过 resume 继续。", file=sys.stderr)

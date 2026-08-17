@@ -68,9 +68,18 @@ WARNING_NO_SPEECH_PROB_MAX = 0.6
 
 
 class PipelineError(RuntimeError):
-    def __init__(self, message: str, *, phase: Phase) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        phase: Phase,
+        video_path: str | None = None,
+        sample_id: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.phase = phase
+        self.video_path = video_path
+        self.sample_id = sample_id
 
 
 def utc_now() -> str:
@@ -522,7 +531,12 @@ def validate_segments(
     )
     phase = engine_phase(engine)
     if not segments:
-        raise PipelineError(f"引擎字幕段为空：{context}", phase=phase)
+        raise PipelineError(
+            f"引擎字幕段为空：{context}",
+            phase=phase,
+            sample_id=sample_id,
+            video_path=video_path,
+        )
     previous_start = -1
     maximum_end = math.ceil(duration_seconds * 1000.0) + 5000
     for index, segment in enumerate(segments):
@@ -537,6 +551,8 @@ def validate_segments(
                 f"引擎字幕段无效：#{index} "
                 f"({context}, start_ms={segment.start_ms}, end_ms={segment.end_ms})",
                 phase=phase,
+                sample_id=sample_id,
+                video_path=video_path,
             )
         previous_start = segment.start_ms
 
@@ -665,11 +681,26 @@ class SubtitlePipeline:
         phase = engine_phase(engine)
         payload = load_json(self.engine_output(engine, candidate.sample_id), phase=phase)
         if payload.get("sample_id") != candidate.sample_id:
-            raise PipelineError(f"{engine} sample_id 不匹配", phase=phase)
+            raise PipelineError(
+                f"{engine} sample_id 不匹配",
+                phase=phase,
+                sample_id=candidate.sample_id,
+                video_path=str(candidate.video_path),
+            )
         if Path(str(payload.get("source_path", ""))).resolve() != candidate.video_path:
-            raise PipelineError(f"{engine} source_path 不匹配", phase=phase)
+            raise PipelineError(
+                f"{engine} source_path 不匹配",
+                phase=phase,
+                sample_id=candidate.sample_id,
+                video_path=str(candidate.video_path),
+            )
         if payload.get("engine") != engine:
-            raise PipelineError(f"{engine} 引擎声明不匹配", phase=phase)
+            raise PipelineError(
+                f"{engine} 引擎声明不匹配",
+                phase=phase,
+                sample_id=candidate.sample_id,
+                video_path=str(candidate.video_path),
+            )
         segments = [Segment.from_dict(item) for item in payload.get("segments", [])]
         validate_segments(
             segments,
@@ -725,7 +756,10 @@ class SubtitlePipeline:
                 before = fingerprint(candidate.video_path, include_hash=False)
                 if not fingerprints_match_quick(before, candidate.video_fingerprint):
                     raise PipelineError(
-                        f"视频在转写前发生变化：{candidate.video_path}", phase=phase
+                        f"视频在转写前发生变化：{candidate.video_path}",
+                        phase=phase,
+                        sample_id=candidate.sample_id,
+                        video_path=str(candidate.video_path),
                     )
                 wav_path = self.run_dir / "work" / f"{candidate.sample_id}.wav"
                 started = time.perf_counter()
@@ -740,7 +774,10 @@ class SubtitlePipeline:
                 after = fingerprint(candidate.video_path, include_hash=False)
                 if not fingerprints_match_quick(after, candidate.video_fingerprint):
                     raise PipelineError(
-                        f"视频在转写后发生变化：{candidate.video_path}", phase=phase
+                        f"视频在转写后发生变化：{candidate.video_path}",
+                        phase=phase,
+                        sample_id=candidate.sample_id,
+                        video_path=str(candidate.video_path),
                     )
                 validate_segments(
                     segments,
@@ -917,6 +954,8 @@ class SubtitlePipeline:
                 raise PipelineError(
                     f"双模型音频时长不一致：{candidate.sample_id}",
                     phase=Phase.QUALITY_GATE,
+                    sample_id=candidate.sample_id,
+                    video_path=str(candidate.video_path),
                 )
             caption_payload = render_segments(funasr_segments)
             report = self.quality_report(
@@ -1011,7 +1050,10 @@ class SubtitlePipeline:
             expected_hash = str(reports[candidate.sample_id]["caption_sha256"])
             if hashlib.sha256(payload).hexdigest() != expected_hash:
                 raise PipelineError(
-                    f"暂存字幕哈希不匹配：{prepared}", phase=Phase.WRITEBACK
+                    f"暂存字幕哈希不匹配：{prepared}",
+                    phase=Phase.WRITEBACK,
+                    sample_id=candidate.sample_id,
+                    video_path=str(candidate.video_path),
                 )
             payloads[candidate.sample_id] = payload
             backup_dir = backups / candidate.sample_id
@@ -1034,7 +1076,10 @@ class SubtitlePipeline:
             )
             if not fingerprints_match(current_video, candidate.video_fingerprint):
                 raise PipelineError(
-                    f"写回前视频已变化：{candidate.video_path}", phase=Phase.WRITEBACK
+                    f"写回前视频已变化：{candidate.video_path}",
+                    phase=Phase.WRITEBACK,
+                    sample_id=candidate.sample_id,
+                    video_path=str(candidate.video_path),
                 )
         committed: list[Candidate] = []
         try:
@@ -1047,6 +1092,8 @@ class SubtitlePipeline:
                     raise PipelineError(
                         f"写回后内容不一致：{candidate.target_path}",
                         phase=Phase.WRITEBACK,
+                        sample_id=candidate.sample_id,
+                        video_path=str(candidate.video_path),
                     )
                 validate_rendered(actual)
             validate_protected(self.protected, phase=Phase.WRITEBACK)

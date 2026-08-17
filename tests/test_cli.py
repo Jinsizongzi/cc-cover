@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest import mock
 
 from cc_cover.cli import ConfigError, create_parser, load_exclusions, main
+from cc_cover.models import Phase
+from cc_cover.pipeline import PipelineError
 
 
 class CliTests(unittest.TestCase):
@@ -251,6 +253,180 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertIn("无需处理", output.getvalue())
         create.assert_not_called()
+
+    def test_transcribe_emits_run_dir_and_done_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_candidates(root, ["only"])
+            output = StringIO()
+            pipeline = mock.Mock()
+            pipeline.run_dir = root / "runs" / "run-1"
+            with mock.patch(
+                "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
+            ):
+                with redirect_stdout(output):
+                    result = main(
+                        [
+                            "transcribe",
+                            str(root),
+                            "--no-hash-videos",
+                            "--runs-root",
+                            str(root / "runs"),
+                            "--model-cache",
+                            str(root / "models"),
+                        ]
+                    )
+
+        self.assertEqual(result, 0)
+        lines = output.getvalue().splitlines()
+        self.assertIn(f"运行目录：{pipeline.run_dir}", lines)
+        self.assertIn(f"字幕已写回并复核通过：{pipeline.run_dir}", lines)
+        pipeline.execute.assert_called_once_with()
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        self.assertEqual(
+            events,
+            [
+                {"event": "run_dir", "path": str(pipeline.run_dir)},
+                {"event": "done", "run_dir": str(pipeline.run_dir)},
+            ],
+        )
+
+    def test_resume_already_committed_emits_done_event_without_executing(
+        self,
+    ) -> None:
+        output = StringIO()
+        pipeline = mock.Mock()
+        pipeline.run_dir = Path("runs/run-1")
+        pipeline.manifest = {"status": "committed"}
+        pipeline.verify.return_value = {"verified_count": 3}
+        with mock.patch(
+            "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
+        ):
+            with redirect_stdout(output):
+                result = main(["resume", str(pipeline.run_dir)])
+
+        self.assertEqual(result, 0)
+        lines = output.getvalue().splitlines()
+        self.assertIn("复核通过，共 3 个字幕文件。", lines)
+        pipeline.execute.assert_not_called()
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        self.assertEqual(
+            events, [{"event": "done", "run_dir": str(pipeline.run_dir)}]
+        )
+
+    def test_resume_pending_executes_and_emits_done_event(self) -> None:
+        output = StringIO()
+        pipeline = mock.Mock()
+        pipeline.run_dir = Path("runs/run-1")
+        pipeline.manifest = {"status": "staged_partial"}
+        with mock.patch(
+            "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
+        ):
+            with redirect_stdout(output):
+                result = main(["resume", str(pipeline.run_dir)])
+
+        self.assertEqual(result, 0)
+        lines = output.getvalue().splitlines()
+        self.assertIn(f"字幕已写回并复核通过：{pipeline.run_dir}", lines)
+        pipeline.execute.assert_called_once_with()
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        self.assertEqual(
+            events, [{"event": "done", "run_dir": str(pipeline.run_dir)}]
+        )
+
+    def test_verify_emits_done_event(self) -> None:
+        output = StringIO()
+        pipeline = mock.Mock()
+        pipeline.run_dir = Path("runs/run-1")
+        pipeline.verify.return_value = {"verified_count": 5}
+        with mock.patch(
+            "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
+        ):
+            with redirect_stdout(output):
+                result = main(["verify", str(pipeline.run_dir)])
+
+        self.assertEqual(result, 0)
+        lines = output.getvalue().splitlines()
+        self.assertIn("复核通过，共 5 个字幕文件。", lines)
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        self.assertEqual(
+            events, [{"event": "done", "run_dir": str(pipeline.run_dir)}]
+        )
+
+    def test_pipeline_error_emits_error_event_with_phase_and_candidate_context(
+        self,
+    ) -> None:
+        output = StringIO()
+        errors = StringIO()
+        pipeline = mock.Mock()
+        pipeline.run_dir = Path("runs/run-1")
+        pipeline.execute.side_effect = PipelineError(
+            "写回后内容不一致：a.txt",
+            phase=Phase.WRITEBACK,
+            sample_id="CC-MISSING-00047",
+            video_path="E:/videos/a.mp4",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_candidates(root, ["only"])
+            with mock.patch(
+                "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
+            ):
+                with redirect_stdout(output), redirect_stderr(errors):
+                    result = main(
+                        [
+                            "transcribe",
+                            str(root),
+                            "--no-hash-videos",
+                            "--runs-root",
+                            str(root / "runs"),
+                            "--model-cache",
+                            str(root / "models"),
+                        ]
+                    )
+
+        self.assertEqual(result, 1)
+        self.assertIn("错误：写回后内容不一致：a.txt", errors.getvalue())
+        events = [
+            json.loads(line)
+            for line in output.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        error_events = [event for event in events if event["event"] == "error"]
+        self.assertEqual(
+            error_events,
+            [
+                {
+                    "event": "error",
+                    "phase": "writeback",
+                    "reason": "写回后内容不一致：a.txt",
+                    "video_path": "E:/videos/a.mp4",
+                    "sample_id": "CC-MISSING-00047",
+                }
+            ],
+        )
+
+    def test_config_error_does_not_emit_error_event(self) -> None:
+        output = StringIO()
+        errors = StringIO()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_candidates(root, ["only"])
+            missing_exclude = root / "missing.json"
+            with redirect_stdout(output), redirect_stderr(errors):
+                result = main(
+                    [
+                        "transcribe",
+                        str(root),
+                        "--no-hash-videos",
+                        "--exclude",
+                        str(missing_exclude),
+                    ]
+                )
+
+        self.assertEqual(result, 1)
+        self.assertIn("错误：", errors.getvalue())
+        self.assertEqual(output.getvalue(), "")
 
 
 if __name__ == "__main__":
