@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from cc_cover.human_readable import format_duration, format_size
 from cc_cover.models import (
     ErrorEvent,
     Event,
@@ -532,32 +533,6 @@ def clear_all_data_text(usage_bytes: int) -> str:
         "确定继续吗？",
     ]
     return "\n".join(lines)
-
-
-def format_size(size_bytes: int) -> str:
-    """字节数转人类可读大小；小于 1KB 按字节，否则保留一位小数。"""
-    value = float(size_bytes)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if value < 1024 or unit == "TB":
-            if unit == "B":
-                return f"{int(value)} B"
-            return f"{value:.1f} {unit}"
-        value /= 1024.0
-    return f"{int(size_bytes)} B"
-
-
-def format_duration(seconds: float | None) -> str:
-    """秒数转中文时长；无法计算时返回「未知」。"""
-    if seconds is None:
-        return "未知"
-    total = max(0, int(seconds))
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours} 时 {minutes} 分 {secs} 秒"
-    if minutes:
-        return f"{minutes} 分 {secs} 秒"
-    return f"{secs} 秒"
 
 
 @dataclass(frozen=True)

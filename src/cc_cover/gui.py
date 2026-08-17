@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Callable
 
 from cc_cover import __version__
+from cc_cover.human_readable import format_duration, format_size
 from cc_cover.gui_support import (
     CLEANUP_WARNING_BYTES,
     FailureInfo,
@@ -49,9 +50,7 @@ from cc_cover.gui_support import (
     focus_existing_window,
     format_column_duration,
     format_column_size,
-    format_duration,
     format_estimate,
-    format_size,
     install_download_bytes,
     install_progress_text,
     list_runs,

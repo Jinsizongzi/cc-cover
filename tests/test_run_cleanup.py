@@ -10,7 +10,6 @@ from cc_cover.gui_support import (
     RunInfo,
     delete_runs,
     directory_size,
-    format_size,
     list_runs,
     runs_total_size,
 )
@@ -168,14 +167,6 @@ class DeleteRunsTests(unittest.TestCase):
 
 
 class CleanupDisplayTests(unittest.TestCase):
-    def test_format_size_human_readable(self) -> None:
-        self.assertEqual(format_size(0), "0 B")
-        self.assertEqual(format_size(512), "512 B")
-        self.assertEqual(format_size(1024), "1.0 KB")
-        self.assertEqual(format_size(1536), "1.5 KB")
-        self.assertEqual(format_size(5 * 1024 * 1024), "5.0 MB")
-        self.assertEqual(format_size(3 * 1024**3), "3.0 GB")
-
     def test_warning_threshold_is_five_gigabytes(self) -> None:
         self.assertEqual(CLEANUP_WARNING_BYTES, 5 * 1024**3)
 

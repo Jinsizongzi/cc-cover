@@ -9,7 +9,6 @@ from cc_cover.gui_support import (
     ProgressSnapshot,
     ProgressTracker,
     confirmation_text,
-    format_duration,
     progress_text,
     scan_confirmation_stats,
     should_play_completion_sound,
@@ -271,22 +270,6 @@ class CompletionStatsTests(unittest.TestCase):
             stats = run_completion_stats(run_dir)
 
         self.assertEqual(stats.written_count, 2)
-
-
-class FormatDurationTests(unittest.TestCase):
-    def test_plain_seconds(self) -> None:
-        self.assertEqual(format_duration(0), "0 秒")
-        self.assertEqual(format_duration(45), "45 秒")
-
-    def test_minutes_and_seconds(self) -> None:
-        self.assertEqual(format_duration(120), "2 分 0 秒")
-        self.assertEqual(format_duration(125), "2 分 5 秒")
-
-    def test_hours_minutes_seconds(self) -> None:
-        self.assertEqual(format_duration(3725), "1 时 2 分 5 秒")
-
-    def test_unknown_duration(self) -> None:
-        self.assertEqual(format_duration(None), "未知")
 
 
 class CompletionSoundTests(unittest.TestCase):
