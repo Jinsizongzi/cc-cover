@@ -24,10 +24,10 @@ import tkinter as tk
 from PIL import ImageGrab
 
 from cc_cover.gui_support import (
-    SingleInstanceLock,
     ensure_data_root,
     runtime_paths,
 )
+from cc_cover.win_native import SingleInstanceLock
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = Path(__file__).resolve().parent

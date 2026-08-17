@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from cc_cover import __version__
 from cc_cover.human_readable import format_duration, format_size
+from cc_cover.win_native import SingleInstanceLock, focus_existing_window
 from cc_cover.gui_support import (
     CLEANUP_WARNING_BYTES,
     FailureInfo,
@@ -25,7 +26,6 @@ from cc_cover.gui_support import (
     ProgressTracker,
     RuntimePaths,
     SettingsError,
-    SingleInstanceLock,
     apply_data_root,
     clean_model_cache,
     clear_all_data_text,
@@ -47,7 +47,6 @@ from cc_cover.gui_support import (
     failure_info_from_command,
     failure_info_from_run,
     first_failed_sample,
-    focus_existing_window,
     format_column_duration,
     format_column_size,
     format_estimate,
