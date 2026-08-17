@@ -40,8 +40,11 @@ from cc_cover.formats import (
 )
 from cc_cover.models import (
     Candidate,
+    EngineStartEvent,
+    Event,
     Phase,
     PipelineOptions,
+    ProgressEvent,
     ProtectedText,
     Segment,
 )
@@ -93,6 +96,11 @@ def write_json_atomic(path: Path, payload: Any) -> None:
         path,
         (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
     )
+
+
+def emit_event(event: Event) -> None:
+    """在人读文字打印旁边无条件追加一行结构化事件；不替代、不影响原有打印。"""
+    print(json.dumps(event.to_dict(), ensure_ascii=False), flush=True)
 
 
 def load_json(path: Path, *, phase: Phase) -> dict[str, Any]:
@@ -698,12 +706,21 @@ class SubtitlePipeline:
             )
         phase = engine_phase(engine_name)
         print(f"加载 {engine_name}：device={self.device}", flush=True)
+        emit_event(EngineStartEvent(engine=engine_name, device=self.device))
         engine.load()
         try:
             for index, candidate in enumerate(pending, start=1):
                 print(
                     f"[{engine_name} {index}/{len(pending)}] {candidate.video_path}",
                     flush=True,
+                )
+                emit_event(
+                    ProgressEvent(
+                        engine=engine_name,
+                        index=index,
+                        total=len(pending),
+                        video_path=str(candidate.video_path),
+                    )
                 )
                 before = fingerprint(candidate.video_path, include_hash=False)
                 if not fingerprints_match_quick(before, candidate.video_fingerprint):

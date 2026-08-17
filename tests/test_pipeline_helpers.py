@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 
 from cc_cover.discovery import discover
@@ -12,15 +15,24 @@ from cc_cover.engines import (
     local_faster_whisper_model,
     local_funasr_model,
 )
-from cc_cover.models import Candidate, Fingerprint, Phase, PipelineOptions, Segment
+from cc_cover.models import (
+    Candidate,
+    EngineStartEvent,
+    Fingerprint,
+    Phase,
+    PipelineOptions,
+    ProgressEvent,
+    Segment,
+)
 from cc_cover.pipeline import (
-    PipelineError,
+    emit_event,
     engine_phase,
     extract_filename_hotwords,
     load_hotwords,
     load_json,
     options_from_dict,
     options_to_dict,
+    PipelineError,
     SubtitlePipeline,
     validate_segments,
     write_bytes_atomic,
@@ -239,6 +251,40 @@ class PipelineHelperTests(unittest.TestCase):
             validate_segments([], 10.0, engine="funasr")
 
         self.assertEqual(caught.exception.phase, Phase.FUNASR)
+
+    def test_engine_start_event_serializes_to_dict(self) -> None:
+        event = EngineStartEvent(engine="funasr", device="cuda")
+
+        self.assertEqual(
+            event.to_dict(),
+            {"event": "engine_start", "engine": "funasr", "device": "cuda"},
+        )
+
+    def test_progress_event_serializes_to_dict(self) -> None:
+        event = ProgressEvent(engine="faster_whisper", index=2, total=5, video_path="a.mp4")
+
+        self.assertEqual(
+            event.to_dict(),
+            {
+                "event": "progress",
+                "engine": "faster_whisper",
+                "index": 2,
+                "total": 5,
+                "video_path": "a.mp4",
+            },
+        )
+
+    def test_emit_event_prints_exactly_one_json_line(self) -> None:
+        output = StringIO()
+        with redirect_stdout(output):
+            emit_event(EngineStartEvent(engine="funasr", device="cpu"))
+
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(
+            json.loads(lines[0]),
+            {"event": "engine_start", "engine": "funasr", "device": "cpu"},
+        )
 
     def test_engine_phase_normalizes_hyphen_and_underscore(self) -> None:
         self.assertEqual(engine_phase("funasr"), Phase.FUNASR)

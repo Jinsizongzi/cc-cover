@@ -5,6 +5,8 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -225,6 +227,51 @@ class PipelineHashStrategyTests(unittest.TestCase):
             self.assertTrue(
                 pipeline.engine_output("funasr", sample_id).is_file()
             )
+
+    def test_run_engine_emits_engine_start_and_progress_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            pipeline, video, _target, _payload = self._pipeline(
+                root, hash_videos=False
+            )
+            sample_id = pipeline.candidates[0].sample_id
+
+            engine = mock.Mock()
+            engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
+            output = StringIO()
+            with mock.patch(
+                "cc_cover.pipeline.FunASREngine", return_value=engine
+            ), mock.patch(
+                "cc_cover.pipeline.extract_audio", return_value=1.0
+            ), redirect_stdout(output):
+                pipeline.run_engine("funasr", [sample_id])
+
+        lines = output.getvalue().splitlines()
+        self.assertIn(f"加载 funasr：device={pipeline.device}", lines)
+        self.assertIn(f"[funasr 1/1] {video}", lines)
+
+        events = []
+        for line in lines:
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and "event" in payload:
+                events.append(payload)
+
+        self.assertEqual(
+            events,
+            [
+                {"event": "engine_start", "engine": "funasr", "device": pipeline.device},
+                {
+                    "event": "progress",
+                    "engine": "funasr",
+                    "index": 1,
+                    "total": 1,
+                    "video_path": str(video),
+                },
+            ],
+        )
 
     def test_run_engine_quick_check_aborts_before_transcription(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -18,6 +18,54 @@ class Phase(str, Enum):
     VERIFY = "verify"
 
 
+class EventKind(str, Enum):
+    """CLI 子进程向 GUI 报告运行状态用的结构化事件种类。
+
+    只在 pipeline.py/cli.py 打印人读文字的同一批打印点旁边无条件追加；
+    人读文字本身不受影响。取值随生产者票（#67 pipeline.py、#68 cli.py）
+    逐步补齐，消费端（#69）按需处理未知取值。
+    """
+
+    ENGINE_START = "engine_start"
+    PROGRESS = "progress"
+
+
+@dataclass(frozen=True)
+class EngineStartEvent:
+    """对应 pipeline.py 里"加载 {engine}：device=..."这一行。"""
+
+    engine: str
+    device: str
+    kind: EventKind = field(default=EventKind.ENGINE_START, init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"event": self.kind.value, "engine": self.engine, "device": self.device}
+
+
+@dataclass(frozen=True)
+class ProgressEvent:
+    """对应 pipeline.py 里"[{engine} {index}/{total}] {video_path}"这一行。"""
+
+    engine: str
+    index: int
+    total: int
+    video_path: str
+    kind: EventKind = field(default=EventKind.PROGRESS, init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event": self.kind.value,
+            "engine": self.engine,
+            "index": self.index,
+            "total": self.total,
+            "video_path": self.video_path,
+        }
+
+
+Event = EngineStartEvent | ProgressEvent
+"""共享的事件 schema；#68 会在 cli.py 那一票里追加 RunDirEvent/DoneEvent/ErrorEvent。"""
+
+
 @dataclass(frozen=True)
 class Fingerprint:
     exists: bool
