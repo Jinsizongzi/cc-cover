@@ -14,6 +14,15 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Callable
 
 from cc_cover import __version__
+from cc_cover.candidates import (
+    confirmation_text,
+    estimate_processing_seconds,
+    format_column_duration,
+    format_column_size,
+    format_estimate,
+    scan_confirmation_stats,
+    selection_summary,
+)
 from cc_cover.human_readable import format_duration, format_size
 from cc_cover.win_native import SingleInstanceLock, focus_existing_window
 from cc_cover.gui_support import (
@@ -31,7 +40,6 @@ from cc_cover.gui_support import (
     clear_all_data_text,
     clear_local_data,
     command_environment,
-    confirmation_text,
     default_data_root,
     delete_runs,
     device_probe_commands,
@@ -43,13 +51,9 @@ from cc_cover.gui_support import (
     environment_status_label,
     error_text,
     estimate_install_required_bytes,
-    estimate_processing_seconds,
     failure_info_from_command,
     failure_info_from_run,
     first_failed_sample,
-    format_column_duration,
-    format_column_size,
-    format_estimate,
     install_download_bytes,
     install_progress_text,
     list_runs,
@@ -71,8 +75,6 @@ from cc_cover.gui_support import (
     runtime_paths,
     save_gui_settings,
     scan_command,
-    scan_confirmation_stats,
-    selection_summary,
     setup_commands,
     should_play_completion_sound,
     stopped_message,

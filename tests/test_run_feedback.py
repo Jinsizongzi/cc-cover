@@ -8,9 +8,7 @@ from pathlib import Path
 from cc_cover.gui_support import (
     ProgressSnapshot,
     ProgressTracker,
-    confirmation_text,
     progress_text,
-    scan_confirmation_stats,
     should_play_completion_sound,
 )
 from cc_cover.models import DoneEvent, EngineStartEvent, ProgressEvent, RunDirEvent
@@ -123,53 +121,6 @@ class ProgressTextTests(unittest.TestCase):
 
         self.assertNotIn("约剩余", text)
         self.assertIn("已用时 5 秒", text)
-
-
-class ScanConfirmationStatsTests(unittest.TestCase):
-    def test_counts_conflict_videos_as_excluded(self) -> None:
-        report = {
-            "candidate_count": 5,
-            "conflicts": [
-                {"target_path": "t1.txt", "videos": ["a.mp4", "b.mp4"]},
-                {"target_path": "t2.txt", "videos": ["c.mp4"]},
-            ],
-        }
-
-        candidates, excluded = scan_confirmation_stats(report)
-
-        self.assertEqual(candidates, 5)
-        self.assertEqual(excluded, 3)
-
-    def test_prefers_explicit_excluded_count_when_present(self) -> None:
-        report = {"candidate_count": 5, "excluded_count": 2, "conflicts": []}
-
-        candidates, excluded = scan_confirmation_stats(report)
-
-        self.assertEqual((candidates, excluded), (5, 2))
-
-    def test_zero_excluded_without_conflicts(self) -> None:
-        self.assertEqual(
-            scan_confirmation_stats({"candidate_count": 4, "conflicts": []}),
-            (4, 0),
-        )
-
-    def test_empty_report_defaults_to_zero(self) -> None:
-        self.assertEqual(scan_confirmation_stats({}), (0, 0))
-
-
-class ConfirmationTextTests(unittest.TestCase):
-    def test_mentions_count_backup_and_excluded(self) -> None:
-        text = confirmation_text(8, 2)
-
-        self.assertIn("将处理 8 个视频并替换同名 TXT", text)
-        self.assertIn("替换前自动备份", text)
-        self.assertIn("已排除 2 个视频", text)
-
-    def test_zero_excluded_uses_explicit_wording(self) -> None:
-        text = confirmation_text(1, 0)
-
-        self.assertIn("将处理 1 个视频", text)
-        self.assertNotIn("已排除 0 个视频，本次不处理", text)
 
 
 class CompletionStatsTests(unittest.TestCase):
