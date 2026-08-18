@@ -14,6 +14,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Callable
 
 from cc_cover import __version__
+from cc_cover.background import TaskCancelled
 from cc_cover.candidates import (
     confirmation_text,
     estimate_processing_seconds,
@@ -110,10 +111,6 @@ PRIMARY_DARK = "#2445b3"
 SUCCESS = "#17803d"
 WARNING = "#b54708"
 ERROR = "#b42318"
-
-
-class TaskCancelled(RuntimeError):
-    """用户主动停止任务时抛出，不当作任务失败处理。"""
 
 
 FEATURE_TEXT = """核心功能

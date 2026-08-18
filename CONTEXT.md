@@ -31,4 +31,8 @@ _Avoid_: Stage（跟上面的既有含义会撞——那个词已经被"暂存"�
 
 **Event**：
 CLI 子进程（`pipeline.py`/`cli.py`）向 GUI 报告运行状态用的结构化消息，逐行 JSON，跟人读文字打印在同一条 stdout 上，靠是否为合法 JSON 区分。已知 kind：`engine_start`、`progress`、`run_dir`、`error`、`done`。
-_Avoid_: Log line（指人读文字那一行，跟 Event 是两回事，别混用）
+_Avoid_: Log line（指人读文字那一行，跟 Event 是两回事，别混用）；WorkerOutcome（那是 GUI 进程内部线程间的消息，不跨进程、不序列化，外形容易跟 Event 混，实际是两个不同边界上的概念，见下）
+
+**WorkerOutcome**：
+GUI 内部"后台 worker 线程 → UI 主线程"这条边界上的消息，走 `self.events`（进程内 `queue.Queue`），从不跨进程、从不序列化成 JSON。覆盖一次后台任务的终态：`idle`、`done`、`cancelled`、`error`。`self.events` 队列里还流过另一批进度类通知（下载进度、日志行、设备探测结果等），那批不属于 WorkerOutcome，维持现状用字符串标签 + tuple 表达。
+_Avoid_: Event（那是"CLI 子进程 → GUI 进程"跨进程边界的消息，逐行 JSON；WorkerOutcome 是同进程内跨线程边界，两者刻意分开，别把其中一个的 kind 取值套到另一个上）
