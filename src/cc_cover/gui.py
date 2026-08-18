@@ -1132,30 +1132,26 @@ class CCCoverApp(ttk.Frame):
             return
 
         def worker() -> None:
-            try:
+            def run() -> None:
                 self._scan_report(root, options)
-                self.events.put(("idle", "扫描完成"))
-            except TaskCancelled as exc:
+                self.events.put(IdleOutcome("扫描完成"))
+
+            def on_cancel(exc: TaskCancelled) -> None:
                 self.events.put(
-                    (
-                        "cancelled",
-                        failure_info_from_command(
-                            [], exc, fallback_stage="扫描"
-                        ),
+                    CancelledOutcome(
+                        info=failure_info_from_command([], exc, fallback_stage="扫描")
                     )
                 )
-            except Exception as exc:
+
+            def on_error(exc: Exception) -> None:
                 self.events.put(
-                    (
-                        "error",
-                        (
-                            "扫描失败",
-                            failure_info_from_command(
-                                [], exc, fallback_stage="扫描"
-                            ),
-                        ),
+                    ErrorOutcome(
+                        title="扫描失败",
+                        info=failure_info_from_command([], exc, fallback_stage="扫描"),
                     )
                 )
+
+            run_in_background(run, on_cancel=on_cancel, on_error=on_error)
 
         self._start_worker(worker, "正在扫描目录…")
 
