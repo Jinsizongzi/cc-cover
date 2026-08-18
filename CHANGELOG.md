@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-18
+
+### 工程
+
+- CLI 到 GUI 的事件契约类型化：pipeline.py/cli.py 逐行输出结构化 JSON 事件（`Event`/`Phase`），替换 GUI 侧原来靠正则从人读文本反推状态的解析方式（#65-#70）。
+- 拆分 gui_support.py（1516 行、8 类互不相关职责）为 8 个职责单一的兄弟模块（settings/data_root/commands/storage/progress/candidates/win_native/human_readable），gui_support.py 整体删除（#71-#79，ADR-0001）。
+- 拆掉 CCCoverApp 里 5 个 worker（setup_environment/scan_directory/start_transcription/_resume_run_dir/check_environment）各自手写的取消/错误处理样板，统一收编进 `run_in_background()`/`WorkerOutcome`；`_poll_events` 删除旧的字符串 + tuple 分支（#80-#87）。
+
+本次改动均为内部重构，不改变任何用户可见行为。
+
 ## [0.4.0] - 2026-08-03
 
 ### 新增
@@ -54,7 +64,8 @@
 - 安全双模型字幕恢复：FunASR 负责中文正文与句级时间戳，faster-whisper 负责对照与冲突审计。
 - 通过质量与格式校验后原子写回目标 TXT，写回前备份，失败时回滚。
 
-[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Jinsizongzi/cc-cover/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Jinsizongzi/cc-cover/releases/tag/v0.3.0
