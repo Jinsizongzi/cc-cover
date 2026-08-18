@@ -1300,7 +1300,8 @@ class CCCoverApp(ttk.Frame):
 
         def worker() -> None:
             chunks: list[str] = []
-            try:
+
+            def run() -> None:
                 self.events.put(("status", "正在继续中断任务…"))
                 manifest = load_optional_json(run_dir / "manifest.json") or {}
                 candidates = manifest.get("candidates") or []
@@ -1311,12 +1312,14 @@ class CCCoverApp(ttk.Frame):
                     self._run_streaming(resume_command(self.paths, run_dir))
                 )
                 self.events.put(
-                    (
-                        "done",
-                        ("任务已完成", "中断任务已继续执行并完成最终复核。", run_dir),
+                    DoneOutcome(
+                        title="任务已完成",
+                        message="中断任务已继续执行并完成最终复核。",
+                        run_dir=run_dir,
                     )
                 )
-            except TaskCancelled as exc:
+
+            def on_cancel(exc: TaskCancelled) -> None:
                 info = failure_info_from_run(
                     chunks,
                     exc,
@@ -1324,22 +1327,22 @@ class CCCoverApp(ttk.Frame):
                     run_dir=run_dir,
                 )
                 self._best_effort_summary(info.run_dir)
-                self.events.put(("cancelled", info))
-            except Exception as exc:
+                self.events.put(CancelledOutcome(info=info))
+
+            def on_error(exc: Exception) -> None:
                 self.events.put(
-                    (
-                        "error",
-                        (
-                            "继续任务失败",
-                            failure_info_from_run(
-                                chunks,
-                                exc,
-                                fallback_stage="继续中断任务",
-                                run_dir=run_dir,
-                            ),
+                    ErrorOutcome(
+                        title="继续任务失败",
+                        info=failure_info_from_run(
+                            chunks,
+                            exc,
+                            fallback_stage="继续中断任务",
+                            run_dir=run_dir,
                         ),
                     )
                 )
+
+            run_in_background(run, on_cancel=on_cancel, on_error=on_error)
 
         self._start_worker(worker, "正在继续中断任务…", log_tab=True)
 
