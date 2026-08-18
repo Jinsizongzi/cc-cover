@@ -139,6 +139,7 @@ def last_progress_counts(output: str) -> tuple[int, int] | None:
 
 _PHASE_STAGE_LABELS: Mapping[Phase, str] = {
     Phase.AUDIO_EXTRACT: "音频提取",
+    Phase.FINGERPRINT: "视频完整性校验",
     Phase.FUNASR: "FunASR 转写",
     Phase.FASTER_WHISPER: "faster-whisper 转写",
     Phase.QUALITY_GATE: "质量门禁",

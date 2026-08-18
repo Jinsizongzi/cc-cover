@@ -11,6 +11,7 @@ class Phase(str, Enum):
 
     SETUP = "setup"
     AUDIO_EXTRACT = "audio_extract"
+    FINGERPRINT = "fingerprint"
     FUNASR = "funasr"
     FASTER_WHISPER = "faster_whisper"
     QUALITY_GATE = "quality_gate"

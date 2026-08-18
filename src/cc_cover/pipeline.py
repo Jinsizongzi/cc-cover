@@ -511,6 +511,9 @@ def faster_whisper_confidence(segments: Sequence[Segment]) -> dict[str, Any]:
     }
 
 
+_ENGINE_NAMES = ("funasr", "faster_whisper")
+
+
 def engine_phase(engine: str | None) -> Phase:
     """引擎标识（不论连字符还是下划线拼法）到处理阶段的映射。"""
     normalized = (engine or "").replace("-", "_")
@@ -718,89 +721,148 @@ class SubtitlePipeline:
         except Exception:
             return False
 
-    def run_engine(self, engine_name: str, sample_ids: Sequence[str]) -> None:
+    def _build_engine(self, engine_name: str) -> Any:
+        if engine_name == "funasr":
+            return FunASREngine(self.options, self.device)
+        return FasterWhisperEngine(self.options, self.device, self.compute_type)
+
+    def _load_engines_if_needed(self, sample_ids: Sequence[str]) -> dict[str, Any]:
+        """按需构造并加载两个引擎；这批候选两个引擎都已完成时不加载。
+
+        两个引擎总是配对加载/释放，不按引擎单独判断是否需要——一旦这批
+        候选里有任何一个引擎的输出缺失，就把两个都装上，理由见 spec：
+        模型常驻范围覆盖整个批次，不逐引擎精细判断。
+        """
+        selected = [
+            candidate for candidate in self.candidates if candidate.sample_id in sample_ids
+        ]
+        needs_any = any(
+            not self.output_complete(engine_name, candidate)
+            for engine_name in _ENGINE_NAMES
+            for candidate in selected
+        )
+        if not needs_any:
+            return {}
+        engines: dict[str, Any] = {}
+        try:
+            for engine_name in _ENGINE_NAMES:
+                print(f"加载 {engine_name}：device={self.device}", flush=True)
+                emit_event(EngineStartEvent(engine=engine_name, device=self.device))
+                engine = self._build_engine(engine_name)
+                engine.load()
+                engines[engine_name] = engine
+        except Exception:
+            # 两个引擎打包加载，第二个失败时第一个已经真的装进显存了——
+            # 不补这个 except 会让它随局部变量一起丢失、永远不会 close()。
+            for loaded in engines.values():
+                loaded.close()
+            raise
+        return engines
+
+    def run_candidates(
+        self, sample_ids: Sequence[str], engines: Mapping[str, Any]
+    ) -> None:
+        """逐候选交替处理：一个候选紧接着跑完两个引擎，再处理下一个候选。
+
+        音频抽取和转写前后的指纹校验都收在候选级别，两个引擎共用同一份
+        wav、共用同一对前后校验——不是每个引擎各来一遍。任一引擎失败，
+        异常照常向上传播，中止这批排在后面的候选（跟改动前的中止语义
+        一致，只是现在是一个合并循环）。
+        """
         selected = [
             candidate for candidate in self.candidates if candidate.sample_id in sample_ids
         ]
         pending = [
             candidate
             for candidate in selected
-            if not self.output_complete(engine_name, candidate)
+            if any(
+                not self.output_complete(engine_name, candidate)
+                for engine_name in _ENGINE_NAMES
+            )
         ]
         if not pending:
             return
-        if engine_name == "funasr":
-            engine: Any = FunASREngine(self.options, self.device)
-        else:
-            engine = FasterWhisperEngine(
-                self.options, self.device, self.compute_type
-            )
-        phase = engine_phase(engine_name)
-        print(f"加载 {engine_name}：device={self.device}", flush=True)
-        emit_event(EngineStartEvent(engine=engine_name, device=self.device))
-        engine.load()
-        try:
-            for index, candidate in enumerate(pending, start=1):
-                print(
-                    f"[{engine_name} {index}/{len(pending)}] {candidate.video_path}",
-                    flush=True,
-                )
-                emit_event(
-                    ProgressEvent(
-                        engine=engine_name,
-                        index=index,
-                        total=len(pending),
-                        video_path=str(candidate.video_path),
-                    )
-                )
-                before = fingerprint(candidate.video_path, include_hash=False)
-                if not fingerprints_match_quick(before, candidate.video_fingerprint):
-                    raise PipelineError(
-                        f"视频在转写前发生变化：{candidate.video_path}",
-                        phase=phase,
-                        sample_id=candidate.sample_id,
-                        video_path=str(candidate.video_path),
-                    )
-                wav_path = self.run_dir / "work" / f"{candidate.sample_id}.wav"
-                started = time.perf_counter()
-                try:
-                    duration = extract_audio(self.ffmpeg, candidate.video_path, wav_path)
-                    segments, metadata = engine.transcribe(
-                        wav_path, duration, self.hotwords
-                    )
-                finally:
-                    if wav_path.exists():
-                        wav_path.unlink()
-                after = fingerprint(candidate.video_path, include_hash=False)
-                if not fingerprints_match_quick(after, candidate.video_fingerprint):
-                    raise PipelineError(
-                        f"视频在转写后发生变化：{candidate.video_path}",
-                        phase=phase,
-                        sample_id=candidate.sample_id,
-                        video_path=str(candidate.video_path),
-                    )
-                validate_segments(
-                    segments,
-                    duration,
-                    engine=engine_name,
+        for index, candidate in enumerate(pending, start=1):
+            before = fingerprint(candidate.video_path, include_hash=False)
+            if not fingerprints_match_quick(before, candidate.video_fingerprint):
+                raise PipelineError(
+                    f"视频在转写前发生变化：{candidate.video_path}",
+                    phase=Phase.FINGERPRINT,
                     sample_id=candidate.sample_id,
                     video_path=str(candidate.video_path),
                 )
-                write_json_atomic(
-                    self.engine_output(engine_name, candidate.sample_id),
-                    {
-                        "schema_version": "1.0",
-                        "sample_id": candidate.sample_id,
-                        "source_path": str(candidate.video_path),
-                        "engine": engine_name,
-                        "duration_seconds": round(duration, 6),
-                        "elapsed_total_seconds": round(time.perf_counter() - started, 6),
-                        "metadata": metadata,
-                        "segments": [segment.to_dict() for segment in segments],
-                    },
+            wav_path = self.run_dir / "work" / f"{candidate.sample_id}.wav"
+            duration: float | None = None
+            try:
+                for engine_name in _ENGINE_NAMES:
+                    if self.output_complete(engine_name, candidate):
+                        continue
+                    if engine_name not in engines:
+                        # 调用方（execute()）本该已经用 _load_engines_if_needed()
+                        # 保证：这批候选里只要有任何一个未完成的引擎，两个引擎
+                        # 就都会被装好传进来。走到这里说明调用方没有遵守这个
+                        # 前提——是编程错误，用 PipelineError 报出来，不要让
+                        # 一个裸 KeyError 冒出去，看不出真实原因。
+                        raise PipelineError(
+                            f"引擎 {engine_name} 未加载，无法处理候选",
+                            phase=Phase.SETUP,
+                            sample_id=candidate.sample_id,
+                            video_path=str(candidate.video_path),
+                        )
+                    engine = engines[engine_name]
+                    print(
+                        f"[{engine_name} {index}/{len(pending)}] {candidate.video_path}",
+                        flush=True,
+                    )
+                    emit_event(
+                        ProgressEvent(
+                            engine=engine_name,
+                            index=index,
+                            total=len(pending),
+                            video_path=str(candidate.video_path),
+                        )
+                    )
+                    if duration is None:
+                        duration = extract_audio(
+                            self.ffmpeg, candidate.video_path, wav_path
+                        )
+                    started = time.perf_counter()
+                    segments, metadata = engine.transcribe(
+                        wav_path, duration, self.hotwords
+                    )
+                    validate_segments(
+                        segments,
+                        duration,
+                        engine=engine_name,
+                        sample_id=candidate.sample_id,
+                        video_path=str(candidate.video_path),
+                    )
+                    write_json_atomic(
+                        self.engine_output(engine_name, candidate.sample_id),
+                        {
+                            "schema_version": "1.0",
+                            "sample_id": candidate.sample_id,
+                            "source_path": str(candidate.video_path),
+                            "engine": engine_name,
+                            "duration_seconds": round(duration, 6),
+                            "elapsed_total_seconds": round(
+                                time.perf_counter() - started, 6
+                            ),
+                            "metadata": metadata,
+                            "segments": [segment.to_dict() for segment in segments],
+                        },
+                    )
+            finally:
+                if wav_path.exists():
+                    wav_path.unlink()
+            after = fingerprint(candidate.video_path, include_hash=False)
+            if not fingerprints_match_quick(after, candidate.video_fingerprint):
+                raise PipelineError(
+                    f"视频在转写后发生变化：{candidate.video_path}",
+                    phase=Phase.FINGERPRINT,
+                    sample_id=candidate.sample_id,
+                    video_path=str(candidate.video_path),
                 )
-        finally:
-            engine.close()
 
     def quality_report(
         self,
@@ -1198,16 +1260,19 @@ class SubtitlePipeline:
         try:
             pilot = list(self.manifest["phases"]["pilot"])
             remaining = list(self.manifest["phases"]["remaining"])
-            if pilot:
-                self.run_engine("funasr", pilot)
-                self.run_engine("faster_whisper", pilot)
-                self.stage(pilot)
-            if remaining:
-                self.run_engine("funasr", remaining)
-                self.run_engine("faster_whisper", remaining)
-                self.stage(list(self.manifest["phases"]["all"]))
-            elif pilot:
-                self.stage(pilot)
+            engines = self._load_engines_if_needed(pilot + remaining)
+            try:
+                if pilot:
+                    self.run_candidates(pilot, engines)
+                    self.stage(pilot)
+                if remaining:
+                    self.run_candidates(remaining, engines)
+                    self.stage(list(self.manifest["phases"]["all"]))
+                elif pilot:
+                    self.stage(pilot)
+            finally:
+                for engine in engines.values():
+                    engine.close()
             self.commit()
             self.verify()
         finally:

@@ -25,7 +25,7 @@ _Avoid_: protected_nonempty_txt、protected_texts（代码里两种字段名并�
 _Avoid_: 用 Stage 表达"流水线处理到哪一步失败"——那是 Phase，两者刻意分开，见下。
 
 **Phase**：
-标注一次失败发生在流水线处理的哪个环节，挂在 `PipelineError`/`EngineError` 上的封闭枚举：setup（run 创建、设备/FFmpeg 解析、热词文件、resume 读取 manifest 等预检）、audio_extract（音频提取）、funasr（FunASR 转写）、faster_whisper（faster-whisper 转写）、quality_gate（质量门禁）、writeback（写回）、verify（写回后的最终复核）。
+标注一次失败发生在流水线处理的哪个环节，挂在 `PipelineError`/`EngineError` 上的封闭枚举：setup（run 创建、设备/FFmpeg 解析、热词文件、resume 读取 manifest 等预检）、audio_extract（音频提取）、fingerprint（候选转写前后的完整性校验——视频在处理期间被改动/替换）、funasr（FunASR 转写）、faster_whisper（faster-whisper 转写）、quality_gate（质量门禁）、writeback（写回）、verify（写回后的最终复核）。
 不含 scan——扫描阶段的错误是 `DiscoveryError`，不是 `PipelineError`/`EngineError`，不挂 Phase。
 _Avoid_: Stage（跟上面的既有含义会撞——那个词已经被"暂存"这个动作占用了，Phase 是刻意选的另一个词，避免 `error.stage` 被误读成 manifest 的 `staged_all` 状态）
 

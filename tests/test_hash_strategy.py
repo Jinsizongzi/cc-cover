@@ -196,7 +196,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
             hasher.assert_not_called()
             self.assertTrue(report["passed"])
 
-    def test_run_engine_uses_quick_checks_before_and_after(self) -> None:
+    def test_run_candidates_uses_quick_checks_before_and_after(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             pipeline, video, _target, _payload = self._pipeline(
@@ -207,28 +207,30 @@ class PipelineHashStrategyTests(unittest.TestCase):
             video.write_bytes(b"video-xyz")
             os.utime(video, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
-            engine = mock.Mock()
-            engine.transcribe.return_value = (
-                [Segment(0, 1000, "你好")],
-                {},
-            )
+            funasr_engine = mock.Mock()
+            funasr_engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
+            faster_engine = mock.Mock()
+            faster_engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
             with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=engine
-            ), mock.patch(
                 "cc_cover.pipeline.extract_audio", return_value=1.0
             ), mock.patch(
                 "cc_cover.discovery.sha256_file", wraps=sha256_file
             ) as hasher:
-                pipeline.run_engine("funasr", [sample_id])
+                pipeline.run_candidates(
+                    [sample_id],
+                    {"funasr": funasr_engine, "faster_whisper": faster_engine},
+                )
 
             hasher.assert_not_called()
-            engine.load.assert_called_once_with()
-            engine.close.assert_called_once_with()
             self.assertTrue(
                 pipeline.engine_output("funasr", sample_id).is_file()
             )
+            self.assertTrue(
+                pipeline.engine_output("faster_whisper", sample_id).is_file()
+            )
 
-    def test_run_engine_emits_engine_start_and_progress_events(self) -> None:
+    def test_run_candidates_interleaves_both_engines_per_candidate(self) -> None:
+        """一个候选紧接着跑完两个引擎，不是分两轮——用事件顺序验证。"""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             pipeline, video, _target, _payload = self._pipeline(
@@ -236,19 +238,22 @@ class PipelineHashStrategyTests(unittest.TestCase):
             )
             sample_id = pipeline.candidates[0].sample_id
 
-            engine = mock.Mock()
-            engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
+            funasr_engine = mock.Mock()
+            funasr_engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
+            faster_engine = mock.Mock()
+            faster_engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
             output = StringIO()
             with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=engine
-            ), mock.patch(
                 "cc_cover.pipeline.extract_audio", return_value=1.0
             ), redirect_stdout(output):
-                pipeline.run_engine("funasr", [sample_id])
+                pipeline.run_candidates(
+                    [sample_id],
+                    {"funasr": funasr_engine, "faster_whisper": faster_engine},
+                )
 
         lines = output.getvalue().splitlines()
-        self.assertIn(f"加载 funasr：device={pipeline.device}", lines)
         self.assertIn(f"[funasr 1/1] {video}", lines)
+        self.assertIn(f"[faster_whisper 1/1] {video}", lines)
 
         events = []
         for line in lines:
@@ -262,7 +267,6 @@ class PipelineHashStrategyTests(unittest.TestCase):
         self.assertEqual(
             events,
             [
-                {"event": "engine_start", "engine": "funasr", "device": pipeline.device},
                 {
                     "event": "progress",
                     "engine": "funasr",
@@ -270,10 +274,17 @@ class PipelineHashStrategyTests(unittest.TestCase):
                     "total": 1,
                     "video_path": str(video),
                 },
+                {
+                    "event": "progress",
+                    "engine": "faster_whisper",
+                    "index": 1,
+                    "total": 1,
+                    "video_path": str(video),
+                },
             ],
         )
 
-    def test_run_engine_quick_check_aborts_before_transcription(self) -> None:
+    def test_run_candidates_quick_check_aborts_before_transcription(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             pipeline, video, _target, _payload = self._pipeline(
@@ -284,18 +295,20 @@ class PipelineHashStrategyTests(unittest.TestCase):
             video.write_bytes(b"video-xyz")
             os.utime(video, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
-            engine = mock.Mock()
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio"
-            ) as extract:
+            funasr_engine = mock.Mock()
+            faster_engine = mock.Mock()
+            with mock.patch("cc_cover.pipeline.extract_audio") as extract:
                 with self.assertRaises(PipelineError) as caught:
-                    pipeline.run_engine("funasr", [sample_id])
+                    pipeline.run_candidates(
+                        [sample_id],
+                        {"funasr": funasr_engine, "faster_whisper": faster_engine},
+                    )
 
             self.assertIn("转写前", str(caught.exception))
+            self.assertEqual(caught.exception.phase, Phase.FINGERPRINT)
             extract.assert_not_called()
-            engine.close.assert_called_once_with()
+            funasr_engine.transcribe.assert_not_called()
+            faster_engine.transcribe.assert_not_called()
 
     def test_commit_full_hash_aborts_on_hidden_video_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

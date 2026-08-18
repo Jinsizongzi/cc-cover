@@ -349,7 +349,7 @@ class ExecuteWritesSummaryTests(unittest.TestCase):
                 funasr_texts=["a" * 9 + str(index) for index in range(5)],
                 faster_texts=["a" * 9 + str(index) for index in range(5)],
             )
-            with patch.object(SubtitlePipeline, "run_engine"):
+            with patch.object(SubtitlePipeline, "run_candidates"):
                 pipeline.execute()
 
             summary = pipeline.run_dir / "summary.txt"
@@ -370,7 +370,7 @@ class ExecuteWritesSummaryTests(unittest.TestCase):
                 funasr_texts=["a" * 3 + str(index) for index in range(5)],
                 faster_texts=["a" * 3 + str(index) for index in range(5)],
             )
-            with patch.object(SubtitlePipeline, "run_engine"):
+            with patch.object(SubtitlePipeline, "run_candidates"):
                 with self.assertRaises(PipelineError):
                     pipeline.execute()
 
