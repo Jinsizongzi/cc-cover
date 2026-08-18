@@ -249,9 +249,19 @@ class ProgressSnapshot:
 class ProgressTracker:
     """跟踪结构化 progress 事件，得到「第 N / 共 M 个」与耗时/粗估剩余时间。
 
-    每个视频在双模型（funasr / faster_whisper）各产出一个 progress 事件；
-    一个文件两个引擎都出现过才计为完成，百分比因此反映真实的转写完成度，
-    而不是"已开始"。剩余时间按「平均耗时 × 剩余数」粗估。
+    「算完成」与「驱动显示」是两个刻意分开的口径：
+
+    - current（第 N 个）：一个文件两个引擎（funasr / faster_whisper）都出现
+      过才计为完成，反映真实的转写完成度，语义不能退让。
+    - percent / remaining_seconds：批次内两个引擎是分两轮跑完的（先把这批
+      全部跑完 funasr，再全部跑一遍 faster_whisper），如果百分比/剩余时间
+      也按 current 算，funasr 单独跑的那一整轮里 current 完全不会涨，
+      elapsed 却持续增长，ETA 公式必然单调走高到失真。这两者改用更细的
+      步数计量——总步数 = 总数 × 2，任意一个引擎碰过一个候选就算一步，不
+      要求两个都碰到——这样 funasr 单轮跑的时候也会持续平滑前进。
+
+    因此 current/total 与 percent 衡量的不是同一件事，界面上可能长期不一致
+    （比如「第 2 个」但百分比已经 60%），这是预期行为，不是两个数字打架。
     """
 
     _ENGINES = ("funasr", "faster_whisper")
@@ -274,14 +284,20 @@ class ProgressTracker:
             if required <= engines
         )
 
+    def _steps_touched(self) -> int:
+        """已产出的 (视频, 引擎) 组合数——任一引擎碰过一个视频就算一步。"""
+        return sum(len(engines) for engines in self._engines_by_path.values())
+
     def snapshot(self, now: float | None = None) -> ProgressSnapshot:
         current = self._completed_count()
         now = time.monotonic() if now is None else float(now)
         elapsed = max(0.0, now - self.started_at)
-        percent = round(current / self.total * 100) if self.total > 0 else 0
+        total_steps = self.total * len(self._ENGINES)
+        steps = self._steps_touched()
+        percent = round(steps / total_steps * 100) if total_steps > 0 else 0
         remaining: float | None = None
-        if current > 0 and self.total > current:
-            remaining = (elapsed / current) * (self.total - current)
+        if steps > 0 and total_steps > steps:
+            remaining = (elapsed / steps) * (total_steps - steps)
         return ProgressSnapshot(
             current=current,
             total=self.total,
@@ -292,9 +308,15 @@ class ProgressTracker:
 
 
 def progress_text(snapshot: ProgressSnapshot) -> str:
-    """进度显示文本：第 N / 共 M 个（百分比）· 已用时 · 约剩余。"""
+    """进度显示文本：第 N / 共 M 个 · 总体进度 · 已用时 · 约剩余。
+
+    「第 N 个」与「总体进度」故意分开展示、不放进同一个括号——两者口径不同
+    （见 ProgressTracker 的类文档），分开写清楚，不会看起来像同一个数字算
+    错了。
+    """
     parts = [
-        f"第 {snapshot.current} / 共 {snapshot.total} 个（{snapshot.percent}%）",
+        f"第 {snapshot.current} / 共 {snapshot.total} 个",
+        f"总体进度 {snapshot.percent}%",
         f"已用时 {format_duration(snapshot.elapsed_seconds)}",
     ]
     if snapshot.remaining_seconds is not None:

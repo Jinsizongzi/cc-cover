@@ -500,7 +500,9 @@ class ProgressTrackerTests(unittest.TestCase):
 
         self.assertEqual(snapshot.current, 1)
         self.assertEqual(snapshot.total, 5)
-        self.assertEqual(snapshot.percent, 20)
+        # percent 走步数口径（3 步 / 共 10 步），不是 candidate 完成比例
+        # （current/total 会是 20%）——两者故意不同，见 ProgressTracker 类文档。
+        self.assertEqual(snapshot.percent, 30)
 
     def test_ignores_non_progress_events_and_plain_text(self) -> None:
         tracker = ProgressTracker(total=3)
@@ -519,12 +521,31 @@ class ProgressTrackerTests(unittest.TestCase):
         snapshot = tracker.snapshot(now=100.0)
 
         self.assertEqual(snapshot.elapsed_seconds, 100.0)
-        # 平均完成耗时 100 秒 × 剩余 9 个。
+        # 步数口径：共 20 步（10 候选 × 2 引擎），已走 2 步，平均每步 50 秒
+        # × 剩余 18 步。
         self.assertEqual(snapshot.remaining_seconds, 900.0)
 
-    def test_no_remaining_estimate_when_nothing_completed(self) -> None:
+    def test_remaining_estimated_once_any_engine_has_touched_a_candidate(
+        self,
+    ) -> None:
+        """只有一个引擎碰过一个候选（远未到"完成一个"的地步）也能给出粗估。
+
+        这是这次改动本身要解决的问题：批次内两个引擎分两轮跑，funasr 单独
+        跑的那一整轮里 current（第 N 个）完全不会涨，但步数会——只要走过
+        至少一步，就不该继续显示"无法估算"。
+        """
         tracker = ProgressTracker(total=10)
         tracker.on_event(_progress("funasr", 1, 1, "C:\\a.mp4"))
+
+        snapshot = tracker.snapshot(now=50.0)
+
+        self.assertEqual(snapshot.current, 0)
+        # 共 20 步，已走 1 步，剩余 19 步，每步耗时 50 秒。
+        self.assertEqual(snapshot.remaining_seconds, 950.0)
+        self.assertEqual(snapshot.percent, 5)
+
+    def test_no_remaining_estimate_when_no_steps_touched_yet(self) -> None:
+        tracker = ProgressTracker(total=10)
 
         snapshot = tracker.snapshot(now=50.0)
 
