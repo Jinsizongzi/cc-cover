@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-18
+
+### 新增
+
+- 运行环境版本一致性检测：启动时若已装依赖版本落后于当前代码，状态栏提示"有更新可用"（不弹窗、不打断）；点击"安装 / 修复运行环境"只重装真正落后的包，不再无差别全量重装（首次全新安装行为不变）。版本全部匹配但仍怀疑环境本身损坏时，会弹出确认框提供强制完整重装的手动入口（#100、#101、#103）。
+- "运行环境"面板新增可选的 HF Token 配置项，用于从 Hugging Face Hub 下载模型时避免未认证请求限流、提高下载速度（#96）。
+
+### 修复
+
+- "运行环境尚未安装"状态提示追加一句提示，告诉用户已有装好的环境可以通过"更改…"按钮直接指过去，不必重新安装（#102）。
+- 进度条"约剩余"时间不再随批次内单引擎（funasr 或 faster_whisper）单独跑的那一整轮持续攀升到失真；百分比与可视化进度条改用更细的步数计量，「第 N 个」候选完成计数的严格语义不变（#97）。
+- 运行日志剥离 tqdm 进度条的 ANSI 转义残留（此前会显示成类似「[A」「34m」的乱码）（#98）。
+
 ## [0.5.0] - 2026-08-18
 
 ### 工程
@@ -64,7 +77,8 @@
 - 安全双模型字幕恢复：FunASR 负责中文正文与句级时间戳，faster-whisper 负责对照与冲突审计。
 - 通过质量与格式校验后原子写回目标 TXT，写回前备份，失败时回滚。
 
-[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Jinsizongzi/cc-cover/compare/v0.3.0...v0.3.1
