@@ -1170,7 +1170,9 @@ class CCCoverApp(ttk.Frame):
             chunks: list[str] = []
             scanning = True
             exclude_file: Path | None = None
-            try:
+
+            def run() -> None:
+                nonlocal scanning, exclude_file
                 report = self._scan_report(root, options)
                 scanning = False
                 fresh_candidates = report.get("candidates", [])
@@ -1200,18 +1202,15 @@ class CCCoverApp(ttk.Frame):
                 )
                 if count == 0:
                     self.events.put(
-                        (
-                            "done",
-                            (
-                                "无需处理",
-                                "没有需要处理的候选（所有候选均已排除或没有候选），本次不处理。",
-                                None,
-                            ),
+                        DoneOutcome(
+                            title="无需处理",
+                            message="没有需要处理的候选（所有候选均已排除或没有候选），本次不处理。",
+                            run_dir=None,
                         )
                     )
                     return
                 if not self._confirm_start(count, excluded_count):
-                    self.events.put(("idle", "已取消开始"))
+                    self.events.put(IdleOutcome("已取消开始"))
                     return
                 self.events.put(
                     (
@@ -1234,39 +1233,36 @@ class CCCoverApp(ttk.Frame):
                 )
                 run_dir = run_dir_from_events(chunks[-1])
                 self.events.put(
-                    (
-                        "done",
-                        (
-                            "字幕补全完成",
-                            f"已完成 {count} 个字幕文件的生成、替换和复核。",
-                            run_dir,
-                        ),
+                    DoneOutcome(
+                        title="字幕补全完成",
+                        message=f"已完成 {count} 个字幕文件的生成、替换和复核。",
+                        run_dir=run_dir,
                     )
                 )
-            except TaskCancelled as exc:
+
+            def on_cancel(exc: TaskCancelled) -> None:
                 info = failure_info_from_run(
                     chunks,
                     exc,
                     fallback_stage=("扫描" if scanning else "转写与写回"),
                 )
                 self._best_effort_summary(info.run_dir)
-                self.events.put(("cancelled", info))
-            except Exception as exc:
+                self.events.put(CancelledOutcome(info=info))
+
+            def on_error(exc: Exception) -> None:
                 self.events.put(
-                    (
-                        "error",
-                        (
-                            "字幕补全失败",
-                            failure_info_from_run(
-                                chunks,
-                                exc,
-                                fallback_stage=(
-                                    "扫描" if scanning else "转写与写回"
-                                ),
-                            ),
+                    ErrorOutcome(
+                        title="字幕补全失败",
+                        info=failure_info_from_run(
+                            chunks,
+                            exc,
+                            fallback_stage=("扫描" if scanning else "转写与写回"),
                         ),
                     )
                 )
+
+            try:
+                run_in_background(run, on_cancel=on_cancel, on_error=on_error)
             finally:
                 if exclude_file is not None:
                     try:
