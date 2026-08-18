@@ -46,6 +46,24 @@ def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
     process.terminate()
 
 
+RUN_SOUND_MIN_SECONDS = 5 * 60
+
+
+def should_play_completion_sound(elapsed_seconds: float | None) -> bool:
+    """运行超过 5 分钟才播放完成提示音。"""
+    return elapsed_seconds is not None and elapsed_seconds > RUN_SOUND_MIN_SECONDS
+
+
+def play_completion_sound() -> None:
+    """播放 Windows 提示音；其他平台或失败时静默跳过。"""
+    try:
+        import winsound
+
+        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+    except (ImportError, OSError, RuntimeError):
+        pass
+
+
 def command_environment(
     paths: RuntimePaths, inherited: Mapping[str, str] | None = None
 ) -> dict[str, str]:

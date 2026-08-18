@@ -142,7 +142,7 @@ class ErrorEvent:
 
 
 Event = EngineStartEvent | ProgressEvent | RunDirEvent | DoneEvent | ErrorEvent
-"""共享的事件 schema，生产者 pipeline.py（#67）/cli.py（#68），消费者 gui_support.py（#69）。"""
+"""共享的事件 schema，生产者 pipeline.py（#67）/cli.py（#68），消费者 progress.py（#69）。"""
 
 _EVENT_DECODERS: Mapping[str, Any] = {
     EventKind.ENGINE_START.value: EngineStartEvent.from_dict,

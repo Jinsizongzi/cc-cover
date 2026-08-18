@@ -20,6 +20,7 @@ from cc_cover.commands import (
     parsed_nvidia_probe,
     scan_command,
     setup_commands,
+    should_play_completion_sound,
     terminate_process_tree,
     transcribe_command,
 )
@@ -267,6 +268,20 @@ class TerminateProcessTreeTests(unittest.TestCase):
         terminate_process_tree(process)
 
         self.assertIsNotNone(process.poll())
+
+
+class CompletionSoundTests(unittest.TestCase):
+    def test_plays_sound_when_run_exceeds_five_minutes(self) -> None:
+        self.assertTrue(should_play_completion_sound(301.0))
+
+    def test_no_sound_at_exactly_five_minutes(self) -> None:
+        self.assertFalse(should_play_completion_sound(300.0))
+
+    def test_no_sound_under_five_minutes(self) -> None:
+        self.assertFalse(should_play_completion_sound(299.0))
+
+    def test_no_sound_when_elapsed_unknown(self) -> None:
+        self.assertFalse(should_play_completion_sound(None))
 
 
 if __name__ == "__main__":

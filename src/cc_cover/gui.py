@@ -31,10 +31,12 @@ from cc_cover.commands import (
     environment_status_label,
     parsed_device,
     parsed_nvidia_probe,
+    play_completion_sound,
     python_candidates,
     resume_command,
     scan_command,
     setup_commands,
+    should_play_completion_sound,
     terminate_process_tree,
     transcribe_command,
 )
@@ -70,8 +72,7 @@ from cc_cover.settings import (
     resolve_default_device,
     save_gui_settings,
 )
-from cc_cover.win_native import SingleInstanceLock, focus_existing_window
-from cc_cover.gui_support import (
+from cc_cover.storage import (
     CLEANUP_WARNING_BYTES,
     clean_model_cache,
     clear_all_data_text,
@@ -85,10 +86,9 @@ from cc_cover.gui_support import (
     list_runs,
     local_data_usage,
     model_cache_cleanup_text,
-    play_completion_sound,
     runs_total_size,
-    should_play_completion_sound,
 )
+from cc_cover.win_native import SingleInstanceLock, focus_existing_window
 from cc_cover.pipeline import (
     SUMMARY_FILENAME,
     CompletionStats,

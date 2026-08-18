@@ -17,7 +17,6 @@ class ProjectContractTests(unittest.TestCase):
         files = [
             project_root / "README.md",
             project_root / "src" / "cc_cover" / "gui.py",
-            project_root / "src" / "cc_cover" / "gui_support.py",
             project_root / "src" / "cc_cover" / "cli.py",
             project_root / "src" / "cc_cover" / "models.py",
             project_root / "src" / "cc_cover" / "pipeline.py",

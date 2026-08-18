@@ -5,7 +5,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cc_cover.gui_support import should_play_completion_sound
 from cc_cover.pipeline import CompletionStats, run_completion_stats
 
 
@@ -107,20 +106,6 @@ class CompletionStatsTests(unittest.TestCase):
             stats = run_completion_stats(run_dir)
 
         self.assertEqual(stats.written_count, 2)
-
-
-class CompletionSoundTests(unittest.TestCase):
-    def test_plays_sound_when_run_exceeds_five_minutes(self) -> None:
-        self.assertTrue(should_play_completion_sound(301.0))
-
-    def test_no_sound_at_exactly_five_minutes(self) -> None:
-        self.assertFalse(should_play_completion_sound(300.0))
-
-    def test_no_sound_under_five_minutes(self) -> None:
-        self.assertFalse(should_play_completion_sound(299.0))
-
-    def test_no_sound_when_elapsed_unknown(self) -> None:
-        self.assertFalse(should_play_completion_sound(None))
 
 
 if __name__ == "__main__":
