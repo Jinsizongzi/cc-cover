@@ -14,7 +14,15 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Callable
 
 from cc_cover import __version__
-from cc_cover.background import TaskCancelled
+from cc_cover.background import (
+    CancelledOutcome,
+    DoneOutcome,
+    ErrorOutcome,
+    IdleOutcome,
+    TaskCancelled,
+    WorkerOutcome,
+    run_in_background,
+)
 from cc_cover.candidates import (
     confirmation_text,
     estimate_processing_seconds,
@@ -1042,7 +1050,8 @@ class CCCoverApp(ttk.Frame):
 
         def worker() -> None:
             chunks: list[str] = []
-            try:
+
+            def run() -> None:
                 self.paths.data_root.mkdir(parents=True, exist_ok=True)
                 base_python = self._find_base_python()
                 device = self.device.get()
@@ -1082,34 +1091,33 @@ class CCCoverApp(ttk.Frame):
                 )
                 self._detect_and_report()
                 self.events.put(
-                    (
-                        "done",
-                        ("安装完成", "运行环境安装并检查通过，可以开始扫描视频。", None),
+                    DoneOutcome(
+                        title="安装完成",
+                        message="运行环境安装并检查通过，可以开始扫描视频。",
+                        run_dir=None,
                     )
                 )
-            except TaskCancelled as exc:
+
+            def on_cancel(exc: TaskCancelled) -> None:
                 self.events.put(
-                    (
-                        "cancelled",
-                        failure_info_from_command(
+                    CancelledOutcome(
+                        info=failure_info_from_command(
+                            chunks, exc, fallback_stage="安装运行环境"
+                        )
+                    )
+                )
+
+            def on_error(exc: Exception) -> None:
+                self.events.put(
+                    ErrorOutcome(
+                        title="环境安装失败",
+                        info=failure_info_from_command(
                             chunks, exc, fallback_stage="安装运行环境"
                         ),
                     )
                 )
-            except Exception as exc:
-                self.events.put(
-                    (
-                        "error",
-                        (
-                            "环境安装失败",
-                            failure_info_from_command(
-                                chunks,
-                                exc,
-                                fallback_stage="安装运行环境",
-                            ),
-                        ),
-                    )
-                )
+
+            run_in_background(run, on_cancel=on_cancel, on_error=on_error)
 
         self._start_worker(worker, "正在准备运行环境…", log_tab=True)
 
@@ -2097,10 +2105,37 @@ class CCCoverApp(ttk.Frame):
             command=dialog.destroy,
         ).pack(side="right")
 
+    def _handle_worker_outcome(self, outcome: WorkerOutcome) -> None:
+        match outcome:
+            case IdleOutcome(status=status):
+                self._set_busy(False, status)
+            case DoneOutcome(title=title, message=message, run_dir=run_dir):
+                session_elapsed = self._session_elapsed()
+                self._set_busy(False, "就绪")
+                if run_dir is not None:
+                    stats = run_completion_stats(run_dir)
+                    if should_play_completion_sound(session_elapsed):
+                        self.after(0, play_completion_sound)
+                    self._show_done_dialog(title, message, run_dir, stats)
+                else:
+                    self._show_done_dialog(title, message, None)
+            case CancelledOutcome(info=info):
+                self._set_busy(False, "任务已停止")
+                self._append_log(stopped_message(info) + "\n")
+                self._show_stopped_dialog(info)
+            case ErrorOutcome(title=title, info=info):
+                self._set_busy(False, "发生错误")
+                self._append_log(f"\n错误：{info.reason}\n")
+                self._show_failure_dialog(title, self._enrich_failure(info))
+
     def _poll_events(self) -> None:
         try:
             while True:
-                event, payload = self.events.get_nowait()
+                item = self.events.get_nowait()
+                if isinstance(item, WorkerOutcome):
+                    self._handle_worker_outcome(item)
+                    continue
+                event, payload = item
                 if event == "log":
                     self._append_log(str(payload))
                     self._on_progress_line(str(payload))
