@@ -1,5 +1,19 @@
 from __future__ import annotations
 
+import re
+
+_ANSI_CSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def strip_ansi_escapes(text: str) -> str:
+    """剥掉 ANSI CSI 转义序列（光标移动、颜色控制码等）。
+
+    tqdm 之类的进度条在真实终端里靠这些转义序列原地刷新同一行，不是给
+    Tkinter Text 控件这种不解析转义码的地方看的——不剥掉会在界面上露出
+    "[A"/"34m"/"0m" 这类残留字符。
+    """
+    return _ANSI_CSI_PATTERN.sub("", text)
+
 
 def format_size(size_bytes: int) -> str:
     """字节数转人类可读大小；小于 1KB 按字节，否则保留一位小数。"""

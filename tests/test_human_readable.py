@@ -2,7 +2,31 @@ from __future__ import annotations
 
 import unittest
 
-from cc_cover.human_readable import format_duration, format_size
+from cc_cover.human_readable import format_duration, format_size, strip_ansi_escapes
+
+
+class StripAnsiEscapesTests(unittest.TestCase):
+    def test_strips_cursor_movement(self) -> None:
+        self.assertEqual(strip_ansi_escapes("100%|done\x1b[A"), "100%|done")
+
+    def test_strips_color_codes(self) -> None:
+        self.assertEqual(
+            strip_ansi_escapes("\x1b[34m██████\x1b[0m"), "██████"
+        )
+
+    def test_strips_realistic_tqdm_frame(self) -> None:
+        raw = "100%|\x1b[34m██████████\x1b[0m| 5/5 [00:00<00:00, 8.82it/s]\x1b[A"
+        self.assertEqual(
+            strip_ansi_escapes(raw),
+            "100%|██████████| 5/5 [00:00<00:00, 8.82it/s]",
+        )
+
+    def test_plain_text_unaffected(self) -> None:
+        self.assertEqual(strip_ansi_escapes("[funasr 31/77] a.mp4"), "[funasr 31/77] a.mp4")
+
+    def test_does_not_touch_brackets_without_escape_byte(self) -> None:
+        # 没有真正的 ESC (\x1b) 字节时，"[A"这种纯文本不应该被误删。
+        self.assertEqual(strip_ansi_escapes("状态：[A]"), "状态：[A]")
 
 
 class FormatSizeTests(unittest.TestCase):

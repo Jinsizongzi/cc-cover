@@ -62,7 +62,7 @@ from cc_cover.data_root import (
     resolve_data_root,
     runtime_paths,
 )
-from cc_cover.human_readable import format_duration, format_size
+from cc_cover.human_readable import format_duration, format_size, strip_ansi_escapes
 from cc_cover.progress import (
     FailureInfo,
     InstallProgressTracker,
@@ -1606,7 +1606,7 @@ class CCCoverApp(ttk.Frame):
 
     def _append_log(self, value: str) -> None:
         self.log_text.configure(state="normal")
-        self.log_text.insert("end", value)
+        self.log_text.insert("end", strip_ansi_escapes(value))
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
