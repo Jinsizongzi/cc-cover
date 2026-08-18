@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,10 +10,76 @@ from unittest.mock import patch
 from cc_cover.data_root import (
     apply_data_root,
     configured_data_root,
+    default_data_root,
+    ensure_data_root,
     is_writable,
     resolve_data_root,
+    runtime_paths,
 )
 from cc_cover.settings import read_settings, settings_file, write_settings
+
+
+class RuntimePathsTests(unittest.TestCase):
+    def test_runtime_paths_follow_fixed_data_root_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = runtime_paths(
+                frozen=True,
+                bundle_root=root / "bundle",
+                data_root=root / "data",
+            )
+
+        self.assertEqual(paths.source_root, (root / "bundle" / "src").resolve())
+        self.assertEqual(paths.data_root, (root / "data").resolve())
+        self.assertEqual(paths.venv_root, (root / "data" / "venv").resolve())
+        self.assertEqual(
+            paths.venv_python,
+            (root / "data" / "venv" / "Scripts" / "python.exe").resolve(),
+        )
+        self.assertEqual(
+            paths.model_cache, (root / "data" / "model-cache").resolve()
+        )
+        self.assertEqual(paths.runs_root, (root / "data" / "runs").resolve())
+        self.assertEqual(paths.temp_root, (root / "data" / "temp").resolve())
+
+    def test_default_data_root_is_app_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(
+                default_data_root(frozen=True, app_dir=root / "exe"),
+                (root / "exe").resolve(),
+            )
+            self.assertEqual(
+                default_data_root(frozen=False, bundle_root=root / "project"),
+                (root / "project").resolve(),
+            )
+
+    def test_default_data_root_uses_launched_executable_when_frozen(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(sys, "executable", str(root / "exe" / "app.exe")):
+                self.assertEqual(
+                    default_data_root(frozen=True),
+                    (root / "exe").resolve(),
+                )
+
+    def test_ensure_data_root_creates_fixed_subdirectories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = runtime_paths(
+                frozen=True,
+                bundle_root=root / "bundle",
+                data_root=root / "data",
+            )
+            ensure_data_root(paths)
+            for directory in (
+                paths.data_root,
+                paths.venv_root,
+                paths.model_cache,
+                paths.runs_root,
+                paths.temp_root,
+            ):
+                self.assertTrue(directory.is_dir())
 
 
 class DataRootWritabilityTests(unittest.TestCase):

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from cc_cover.cli import create_parser
-from cc_cover.data_root import default_data_root, ensure_data_root, runtime_paths
-from cc_cover.gui_support import (
+from cc_cover.commands import (
     GuiOptions,
     command_environment,
     detect_device_command,
@@ -20,72 +20,13 @@ from cc_cover.gui_support import (
     parsed_nvidia_probe,
     scan_command,
     setup_commands,
+    terminate_process_tree,
     transcribe_command,
 )
+from cc_cover.data_root import runtime_paths
 
 
-class GuiSupportTests(unittest.TestCase):
-    def test_runtime_paths_follow_fixed_data_root_layout(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            paths = runtime_paths(
-                frozen=True,
-                bundle_root=root / "bundle",
-                data_root=root / "data",
-            )
-
-        self.assertEqual(paths.source_root, (root / "bundle" / "src").resolve())
-        self.assertEqual(paths.data_root, (root / "data").resolve())
-        self.assertEqual(paths.venv_root, (root / "data" / "venv").resolve())
-        self.assertEqual(
-            paths.venv_python,
-            (root / "data" / "venv" / "Scripts" / "python.exe").resolve(),
-        )
-        self.assertEqual(
-            paths.model_cache, (root / "data" / "model-cache").resolve()
-        )
-        self.assertEqual(paths.runs_root, (root / "data" / "runs").resolve())
-        self.assertEqual(paths.temp_root, (root / "data" / "temp").resolve())
-
-    def test_default_data_root_is_app_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            self.assertEqual(
-                default_data_root(frozen=True, app_dir=root / "exe"),
-                (root / "exe").resolve(),
-            )
-            self.assertEqual(
-                default_data_root(frozen=False, bundle_root=root / "project"),
-                (root / "project").resolve(),
-            )
-
-    def test_default_data_root_uses_launched_executable_when_frozen(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with patch.object(sys, "executable", str(root / "exe" / "app.exe")):
-                self.assertEqual(
-                    default_data_root(frozen=True),
-                    (root / "exe").resolve(),
-                )
-
-    def test_ensure_data_root_creates_fixed_subdirectories(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            paths = runtime_paths(
-                frozen=True,
-                bundle_root=root / "bundle",
-                data_root=root / "data",
-            )
-            ensure_data_root(paths)
-            for directory in (
-                paths.data_root,
-                paths.venv_root,
-                paths.model_cache,
-                paths.runs_root,
-                paths.temp_root,
-            ):
-                self.assertTrue(directory.is_dir())
-
+class CommandConstructionTests(unittest.TestCase):
     def test_commands_always_receive_user_selected_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
@@ -291,6 +232,41 @@ class DeviceDetectionTests(unittest.TestCase):
 
         self.assertEqual(commands[0][0], str(paths.venv_python))
         self.assertEqual(commands[1][0], "nvidia-smi")
+
+
+class TerminateProcessTreeTests(unittest.TestCase):
+    def test_kills_live_child_process(self) -> None:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        try:
+            terminate_process_tree(process)
+            deadline = time.monotonic() + 5
+            while process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertIsNotNone(process.poll())
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+    def test_finished_process_is_a_noop(self) -> None:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        process = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+        )
+        process.wait()
+
+        terminate_process_tree(process)
+
+        self.assertIsNotNone(process.poll())
 
 
 if __name__ == "__main__":
