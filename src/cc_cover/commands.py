@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 from cc_cover.data_root import RuntimePaths
 from cc_cover.settings import GUI_DEVICE_CHOICES
@@ -20,6 +25,12 @@ ASR_DEPENDENCIES = (
     "numpy>=1.26,<2",
     "soundfile>=0.12,<1",
 )
+# 受版本一致性检测管理的全部依赖：torch/torchaudio 配对（由 TORCH_VERSION 控制）
+# + ASR_DEPENDENCIES 各项各自的包名，从 ASR_DEPENDENCIES 派生，避免手写第二份清单。
+TRACKED_PACKAGES: tuple[str, ...] = ("torch", "torchaudio") + tuple(
+    Requirement(spec).name for spec in ASR_DEPENDENCIES
+)
+_TORCH_PAIR = frozenset({"torch", "torchaudio"})
 
 
 @dataclass(frozen=True)
@@ -144,8 +155,17 @@ def python_candidates() -> list[list[str]]:
 
 
 def setup_commands(
-    paths: RuntimePaths, base_python: Sequence[str], accelerator: str
+    paths: RuntimePaths,
+    base_python: Sequence[str],
+    accelerator: str,
+    outdated: set[str] | None = None,
 ) -> list[list[str]]:
+    """构造安装/修复命令。
+
+    outdated 为 None 时是全量安装（覆盖首次安装场景，行为与不做版本检测时
+    完全一致）；传入非 None 的包名集合时，只重装集合里的包——torch 配对的
+    卸载+强制重装步骤只在 torch/torchaudio 至少一个落后时才会加入。
+    """
     if accelerator not in {"cuda", "cpu"}:
         raise ValueError(f"不支持的加速器：{accelerator}")
     torch_index = (
@@ -156,49 +176,57 @@ def setup_commands(
     commands: list[list[str]] = []
     if not paths.venv_python.is_file():
         commands.append([*base_python, "-m", "venv", str(paths.venv_root)])
-    commands.extend(
+    commands.append(
         [
-            [
-                str(paths.venv_python),
-                "-m",
-                "pip",
-                "install",
-                "--upgrade",
-                "pip",
-                "setuptools",
-                "wheel",
-            ],
-            # CPU/CUDA 轮子版本号相同，必须先卸掉再装，否则 pip 会跳过替换。
-            [
-                str(paths.venv_python),
-                "-m",
-                "pip",
-                "uninstall",
-                "-y",
-                "torch",
-                "torchaudio",
-            ],
-            [
-                str(paths.venv_python),
-                "-m",
-                "pip",
-                "install",
-                "--force-reinstall",
-                "--no-cache-dir",
-                f"torch=={TORCH_VERSION}",
-                f"torchaudio=={TORCH_VERSION}",
-                "--index-url",
-                torch_index,
-            ],
-            [
-                str(paths.venv_python),
-                "-m",
-                "pip",
-                "install",
-                *ASR_DEPENDENCIES,
-            ],
+            str(paths.venv_python),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "pip",
+            "setuptools",
+            "wheel",
         ]
     )
+    needs_torch = outdated is None or bool(_TORCH_PAIR & outdated)
+    if needs_torch:
+        commands.extend(
+            [
+                # CPU/CUDA 轮子版本号相同，必须先卸掉再装，否则 pip 会跳过替换。
+                [
+                    str(paths.venv_python),
+                    "-m",
+                    "pip",
+                    "uninstall",
+                    "-y",
+                    "torch",
+                    "torchaudio",
+                ],
+                [
+                    str(paths.venv_python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--force-reinstall",
+                    "--no-cache-dir",
+                    f"torch=={TORCH_VERSION}",
+                    f"torchaudio=={TORCH_VERSION}",
+                    "--index-url",
+                    torch_index,
+                ],
+            ]
+        )
+    asr_targets = (
+        ASR_DEPENDENCIES
+        if outdated is None
+        else tuple(
+            spec for spec in ASR_DEPENDENCIES if Requirement(spec).name in outdated
+        )
+    )
+    if asr_targets:
+        commands.append(
+            [str(paths.venv_python), "-m", "pip", "install", *asr_targets]
+        )
     return commands
 
 
@@ -213,6 +241,15 @@ def environment_check_command(
         "-c",
         (
             "import ctranslate2, funasr, faster_whisper, imageio_ffmpeg, torch; "
+            "from importlib.metadata import PackageNotFoundError, version as _pkg_version; "
+            f"_tracked = {TRACKED_PACKAGES!r}\n"
+            "_versions = {}\n"
+            "for _name in _tracked:\n"
+            "    try:\n"
+            "        _versions[_name] = _pkg_version(_name)\n"
+            "    except PackageNotFoundError:\n"
+            "        pass\n"
+            "print('VERSIONS: ' + ' '.join(f'{k}={v}' for k, v in _versions.items())); "
             f"require_cuda = {require_cuda}; "
             "cuda_ok = bool(torch.cuda.is_available()); "
             "ct2_count = int(ctranslate2.get_cuda_device_count()); "
@@ -229,6 +266,47 @@ def environment_check_command(
             ")"
         ),
     ]
+
+
+_VERSIONS_LINE_PATTERN = re.compile(r"^VERSIONS:\s*(?P<pairs>.+)$", re.MULTILINE)
+_VERSION_PAIR_PATTERN = re.compile(r"(?P<name>[A-Za-z0-9_.-]+)=(?P<version>\S+)")
+
+
+def parse_installed_versions(output: str) -> dict[str, str]:
+    """从 environment_check_command() 的输出里解析已装包版本。
+
+    找不到 VERSIONS: 那一行时返回空字典（比如脚本在打印这行之前就失败了）。
+    """
+    match = _VERSIONS_LINE_PATTERN.search(output)
+    if not match:
+        return {}
+    return {
+        pair.group("name"): pair.group("version")
+        for pair in _VERSION_PAIR_PATTERN.finditer(match.group("pairs"))
+    }
+
+
+def _unsatisfied(name: str, specifier: SpecifierSet, installed: Mapping[str, str]) -> bool:
+    """已装版本缺失、或不满足给定约束，即视为不满足。"""
+    version_text = installed.get(name)
+    return version_text is None or Version(version_text) not in specifier
+
+
+def outdated_packages(installed: Mapping[str, str]) -> set[str]:
+    """比对已装版本与当前代码声明的约束，返回不满足约束的包名集合。
+
+    torch/torchaudio 配对处理：任一不满足（含缺失）就把两个都计入结果集，
+    因为它们总是同一条 pip 命令、同一个版本号装出来的。
+    """
+    outdated: set[str] = set()
+    torch_specifier = SpecifierSet(f"=={TORCH_VERSION}")
+    if any(_unsatisfied(name, torch_specifier, installed) for name in _TORCH_PAIR):
+        outdated |= _TORCH_PAIR
+    for spec in ASR_DEPENDENCIES:
+        requirement = Requirement(spec)
+        if _unsatisfied(requirement.name, requirement.specifier, installed):
+            outdated.add(requirement.name)
+    return outdated
 
 
 def detect_device_command(paths: RuntimePaths) -> list[str]:

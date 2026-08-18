@@ -9,6 +9,8 @@ from pathlib import Path
 
 from cc_cover.cli import create_parser
 from cc_cover.commands import (
+    ASR_DEPENDENCIES,
+    TORCH_VERSION,
     GuiOptions,
     command_environment,
     detect_device_command,
@@ -16,6 +18,8 @@ from cc_cover.commands import (
     environment_check_command,
     environment_status_label,
     nvidia_probe_command,
+    outdated_packages,
+    parse_installed_versions,
     parsed_device,
     parsed_nvidia_probe,
     scan_command,
@@ -282,6 +286,134 @@ class CompletionSoundTests(unittest.TestCase):
 
     def test_no_sound_when_elapsed_unknown(self) -> None:
         self.assertFalse(should_play_completion_sound(None))
+
+
+class VersionConsistencyTests(unittest.TestCase):
+    ALL_MATCHING = {
+        "torch": TORCH_VERSION,
+        "torchaudio": TORCH_VERSION,
+        "imageio-ffmpeg": "0.9.0",
+        "funasr": "1.3.16",
+        "modelscope": "1.38.1",
+        "faster-whisper": "1.2.1",
+        "ctranslate2": "4.8.1",
+        "numpy": "1.27.0",
+        "soundfile": "0.12.5",
+    }
+
+    def test_environment_check_command_prints_parsable_version_line(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True, bundle_root=base / "bundle", data_root=base / "data"
+            )
+            script = environment_check_command(paths, "cpu")[-1]
+
+        self.assertIn("VERSIONS:", script)
+        self.assertIn("importlib.metadata", script)
+
+    def test_parse_installed_versions_reads_the_versions_line(self) -> None:
+        output = (
+            "环境检查通过\n"
+            "VERSIONS: torch=2.5.1 torchaudio=2.5.1 funasr=1.3.15\n"
+            "PyTorch: 2.5.1\n"
+        )
+
+        self.assertEqual(
+            parse_installed_versions(output),
+            {"torch": "2.5.1", "torchaudio": "2.5.1", "funasr": "1.3.15"},
+        )
+
+    def test_parse_installed_versions_missing_line_returns_empty(self) -> None:
+        self.assertEqual(parse_installed_versions("没有版本行"), {})
+
+    def test_outdated_packages_empty_when_everything_matches(self) -> None:
+        self.assertEqual(outdated_packages(self.ALL_MATCHING), set())
+
+    def test_outdated_packages_flags_exact_pin_mismatch(self) -> None:
+        installed = dict(self.ALL_MATCHING, funasr="1.3.15")
+
+        self.assertEqual(outdated_packages(installed), {"funasr"})
+
+    def test_outdated_packages_flags_range_constraint_violation(self) -> None:
+        installed = dict(self.ALL_MATCHING, numpy="2.1.0")
+
+        self.assertEqual(outdated_packages(installed), {"numpy"})
+
+    def test_outdated_packages_pairs_torch_and_torchaudio(self) -> None:
+        installed = dict(self.ALL_MATCHING, torch="2.4.0")
+
+        self.assertEqual(outdated_packages(installed), {"torch", "torchaudio"})
+
+    def test_outdated_packages_treats_missing_entry_as_outdated(self) -> None:
+        installed = dict(self.ALL_MATCHING)
+        del installed["soundfile"]
+
+        self.assertEqual(outdated_packages(installed), {"soundfile"})
+
+    def test_setup_commands_outdated_none_matches_full_install(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True, bundle_root=base / "bundle", data_root=base / "data"
+            )
+            paths.venv_python.parent.mkdir(parents=True, exist_ok=True)
+            paths.venv_python.write_text("")
+            full = setup_commands(paths, ["python"], "cpu")
+            explicit_none = setup_commands(paths, ["python"], "cpu", outdated=None)
+
+        self.assertEqual(full, explicit_none)
+        self.assertEqual(len(full), 4)
+        for spec in ASR_DEPENDENCIES:
+            self.assertIn(spec, full[3])
+
+    def test_setup_commands_outdated_subset_skips_torch_and_untouched_deps(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True, bundle_root=base / "bundle", data_root=base / "data"
+            )
+            paths.venv_python.parent.mkdir(parents=True, exist_ok=True)
+            paths.venv_python.write_text("")
+            commands = setup_commands(
+                paths, ["python"], "cpu", outdated={"funasr"}
+            )
+
+        self.assertEqual(len(commands), 2)
+        self.assertNotIn("uninstall", [part for cmd in commands for part in cmd])
+        self.assertIn("funasr==1.3.16", commands[1])
+        for spec in ASR_DEPENDENCIES:
+            if not spec.startswith("funasr"):
+                self.assertNotIn(spec, commands[1])
+
+    def test_setup_commands_outdated_empty_set_reinstalls_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True, bundle_root=base / "bundle", data_root=base / "data"
+            )
+            paths.venv_python.parent.mkdir(parents=True, exist_ok=True)
+            paths.venv_python.write_text("")
+            commands = setup_commands(paths, ["python"], "cpu", outdated=set())
+
+        self.assertEqual(len(commands), 1)
+        self.assertIn("--upgrade", commands[0])
+
+    def test_setup_commands_outdated_torch_only_skips_asr_install(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            paths = runtime_paths(
+                frozen=True, bundle_root=base / "bundle", data_root=base / "data"
+            )
+            paths.venv_python.parent.mkdir(parents=True, exist_ok=True)
+            paths.venv_python.write_text("")
+            commands = setup_commands(paths, ["python"], "cpu", outdated={"torch"})
+
+        self.assertEqual(len(commands), 3)
+        self.assertIn("uninstall", commands[1])
+        self.assertIn("--force-reinstall", commands[2])
 
 
 if __name__ == "__main__":
