@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from cc_cover import gui_support
+from cc_cover import settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -70,7 +71,7 @@ class PackagingTests(unittest.TestCase):
         self.assertIn("Source: \"..\\dist\\CC-Cover\\*\"", iss)
         self.assertIn("recursesubdirs", iss)
         data_root_items = set(gui_support.DATA_ROOT_SUBDIRECTORIES) | {
-            gui_support.SETTINGS_FILENAME
+            settings.SETTINGS_FILENAME
         }
         for name in sorted(data_root_items):
             with self.subTest(name=name):

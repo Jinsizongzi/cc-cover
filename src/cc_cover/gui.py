@@ -24,17 +24,22 @@ from cc_cover.candidates import (
     selection_summary,
 )
 from cc_cover.human_readable import format_duration, format_size
+from cc_cover.settings import (
+    GUI_DEVICE_CHOICES,
+    GuiSettings,
+    SettingsError,
+    load_gui_settings,
+    resolve_default_device,
+    save_gui_settings,
+)
 from cc_cover.win_native import SingleInstanceLock, focus_existing_window
 from cc_cover.gui_support import (
     CLEANUP_WARNING_BYTES,
     FailureInfo,
-    GUI_DEVICE_CHOICES,
-    GuiSettings,
     GuiOptions,
     InstallProgressTracker,
     ProgressTracker,
     RuntimePaths,
-    SettingsError,
     apply_data_root,
     clean_model_cache,
     clear_all_data_text,
@@ -57,7 +62,6 @@ from cc_cover.gui_support import (
     install_download_bytes,
     install_progress_text,
     list_runs,
-    load_gui_settings,
     local_data_usage,
     model_cache_cleanup_text,
     parse_event_line,
@@ -68,12 +72,10 @@ from cc_cover.gui_support import (
     python_candidates,
     resume_command,
     resolve_data_root,
-    resolve_default_device,
     run_dir_from_events,
     run_is_resumable,
     runs_total_size,
     runtime_paths,
-    save_gui_settings,
     scan_command,
     setup_commands,
     should_play_completion_sound,

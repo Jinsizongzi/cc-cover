@@ -106,7 +106,7 @@ class GuiSmokeTests(unittest.TestCase):
         from unittest import mock
 
         from cc_cover.gui import CCCoverApp
-        from cc_cover.gui_support import settings_file
+        from cc_cover.settings import settings_file
 
         temporary = tempfile.TemporaryDirectory()
         root_path = Path(temporary.name).resolve()
