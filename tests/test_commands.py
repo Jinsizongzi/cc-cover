@@ -22,6 +22,7 @@ from cc_cover.commands import (
     parse_installed_versions,
     parsed_device,
     parsed_nvidia_probe,
+    reinstall_scope,
     scan_command,
     setup_commands,
     should_play_completion_sound,
@@ -143,6 +144,14 @@ class CommandConstructionTests(unittest.TestCase):
         self.assertEqual(
             environment_status_label("cpu", "CUDA: False"),
             "运行环境已就绪（CPU）",
+        )
+        self.assertEqual(
+            environment_status_label("cpu", "CUDA: False", outdated=True),
+            "运行环境已就绪（CPU）（有更新可用）",
+        )
+        self.assertEqual(
+            environment_status_label("cuda", "CUDA: True", outdated=False),
+            "运行环境已就绪（GPU）",
         )
 
     def test_subprocess_environment_includes_bundled_source(self) -> None:
@@ -414,6 +423,22 @@ class VersionConsistencyTests(unittest.TestCase):
         self.assertEqual(len(commands), 3)
         self.assertIn("uninstall", commands[1])
         self.assertIn("--force-reinstall", commands[2])
+
+    def test_reinstall_scope_none_means_everything(self) -> None:
+        self.assertEqual(reinstall_scope(None), (True, True))
+
+    def test_reinstall_scope_torch_only(self) -> None:
+        self.assertEqual(reinstall_scope({"torch"}), (True, False))
+        self.assertEqual(reinstall_scope({"torchaudio"}), (True, False))
+
+    def test_reinstall_scope_asr_only(self) -> None:
+        self.assertEqual(reinstall_scope({"funasr"}), (False, True))
+
+    def test_reinstall_scope_empty_means_nothing(self) -> None:
+        self.assertEqual(reinstall_scope(set()), (False, False))
+
+    def test_reinstall_scope_mixed(self) -> None:
+        self.assertEqual(reinstall_scope({"torch", "numpy"}), (True, True))
 
 
 if __name__ == "__main__":

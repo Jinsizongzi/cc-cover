@@ -38,10 +38,13 @@ from cc_cover.commands import (
     device_probe_commands,
     environment_check_command,
     environment_status_label,
+    outdated_packages,
+    parse_installed_versions,
     parsed_device,
     parsed_nvidia_probe,
     play_completion_sound,
     python_candidates,
+    reinstall_scope,
     resume_command,
     scan_command,
     setup_commands,
@@ -944,6 +947,9 @@ class CCCoverApp(ttk.Frame):
             parent=self.master,
         )
 
+    def _outdated_from_check_output(self, output: str) -> set[str]:
+        return outdated_packages(parse_installed_versions(output))
+
     def check_environment(self) -> None:
         def worker() -> None:
             device = "auto"
@@ -960,10 +966,16 @@ class CCCoverApp(ttk.Frame):
                     environment_check_command(self.paths, device)
                 )
                 self._prompt_device_recheck = False
+                has_update = bool(self._outdated_from_check_output(output))
                 self.events.put(
                     (
                         "environment",
-                        (True, environment_status_label(device, output)),
+                        (
+                            True,
+                            environment_status_label(
+                                device, output, outdated=has_update
+                            ),
+                        ),
                     )
                 )
                 self.events.put(("log", output + "\n"))
@@ -1063,9 +1075,28 @@ class CCCoverApp(ttk.Frame):
                 self.paths.data_root.mkdir(parents=True, exist_ok=True)
                 base_python = self._find_base_python()
                 device = self.device.get()
-                commands = setup_commands(self.paths, base_python, device)
+                outdated: set[str] | None = None
+                if self.paths.venv_python.is_file():
+                    try:
+                        check_output = self._run_capture(
+                            environment_check_command(self.paths, device)
+                        )
+                    except TaskCancelled:
+                        raise
+                    except Exception:
+                        # 环境本身有问题（比如 CUDA 不可用），走全量重装最保险，
+                        # 不尝试用一次失败的检查结果算精简重装范围。TaskCancelled
+                        # 不在此列——用户主动停止要照常走 on_cancel，不能被这里
+                        # 当成"环境检查失败"吞掉、退化成继续跑完整安装。
+                        outdated = None
+                    else:
+                        outdated = self._outdated_from_check_output(check_output)
+                commands = setup_commands(
+                    self.paths, base_python, device, outdated=outdated
+                )
+                include_torch, include_asr = reinstall_scope(outdated)
                 self.events.put(("log", "开始安装运行环境。此过程可能需要较长时间。\n"))
-                if device == "cuda":
+                if device == "cuda" and include_torch:
                     self.events.put(
                         (
                             "log",
@@ -1075,7 +1106,14 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(
                     (
                         "install_start",
-                        (install_download_bytes(device), len(commands)),
+                        (
+                            install_download_bytes(
+                                device,
+                                include_torch=include_torch,
+                                include_asr=include_asr,
+                            ),
+                            len(commands),
+                        ),
                     )
                 )
                 for index, command in enumerate(commands, start=1):

@@ -154,6 +154,19 @@ def python_candidates() -> list[list[str]]:
     return candidates
 
 
+def reinstall_scope(outdated: set[str] | None) -> tuple[bool, bool]:
+    """outdated 落在 setup_commands() 里会实际触发哪些安装步骤。
+
+    返回 (是否需要重装 torch/torchaudio, 是否需要重装至少一个 ASR_DEPENDENCIES
+    包)。outdated 为 None（全量安装）时两者都是 True。调用方（比如 GUI 侧渲染
+    日志文案、估算下载量）应该用这个函数而不是自己重新判断 outdated 里有没有
+    "torch"/"torchaudio" 这类领域知识。
+    """
+    needs_torch = outdated is None or bool(_TORCH_PAIR & outdated)
+    needs_asr = outdated is None or bool(outdated - _TORCH_PAIR)
+    return needs_torch, needs_asr
+
+
 def setup_commands(
     paths: RuntimePaths,
     base_python: Sequence[str],
@@ -188,7 +201,7 @@ def setup_commands(
             "wheel",
         ]
     )
-    needs_torch = outdated is None or bool(_TORCH_PAIR & outdated)
+    needs_torch, _ = reinstall_scope(outdated)
     if needs_torch:
         commands.extend(
             [
@@ -351,7 +364,8 @@ def parsed_nvidia_probe(output: str) -> str | None:
     return None
 
 
-def environment_status_label(accelerator: str, _check_output: str = "") -> str:
-    if accelerator == "cuda":
-        return "运行环境已就绪（GPU）"
-    return "运行环境已就绪（CPU）"
+def environment_status_label(
+    accelerator: str, _check_output: str = "", *, outdated: bool = False
+) -> str:
+    base = "运行环境已就绪（GPU）" if accelerator == "cuda" else "运行环境已就绪（CPU）"
+    return f"{base}（有更新可用）" if outdated else base

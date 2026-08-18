@@ -54,6 +54,24 @@ class EstimateBytesTests(unittest.TestCase):
             TORCH_CUDA_BYTES + ASR_DEPENDENCIES_BYTES,
         )
 
+    def test_install_download_excludes_torch_when_not_requested(self) -> None:
+        self.assertEqual(
+            install_download_bytes("cuda", include_torch=False),
+            ASR_DEPENDENCIES_BYTES,
+        )
+
+    def test_install_download_excludes_asr_when_not_requested(self) -> None:
+        self.assertEqual(
+            install_download_bytes("cpu", include_asr=False),
+            TORCH_CPU_BYTES,
+        )
+
+    def test_install_download_zero_when_nothing_requested(self) -> None:
+        self.assertEqual(
+            install_download_bytes("cpu", include_torch=False, include_asr=False),
+            0,
+        )
+
     def test_precheck_total_includes_models_and_buffer(self) -> None:
         self.assertEqual(
             estimate_install_required_bytes("cpu"),

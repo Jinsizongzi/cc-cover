@@ -24,14 +24,24 @@ ASR_DEPENDENCIES_BYTES = 400 * 1024**2
 INSTALL_BUFFER_BYTES = 1024**3
 
 
-def install_download_bytes(device: str) -> int:
+def install_download_bytes(
+    device: str, *, include_torch: bool = True, include_asr: bool = True
+) -> int:
     """安装阶段 pip 实际下载量的估算（torch 轮子 + ASR 依赖，不含模型）。
 
     用于安装进度条的总量与剩余时间估算；与``estimate_install_required_bytes``
     不同——后者额外计入首次运行需下载的模型与余量，用于磁盘预检。
+
+    include_torch/include_asr 用于精简重装场景（只重装部分包时，对应那部分
+    不计入总量估算，避免进度条分母虚高）；两者默认 True，保持全量安装时的
+    估算不变。
     """
-    torch_bytes = TORCH_CUDA_BYTES if device == "cuda" else TORCH_CPU_BYTES
-    return torch_bytes + ASR_DEPENDENCIES_BYTES
+    total = 0
+    if include_torch:
+        total += TORCH_CUDA_BYTES if device == "cuda" else TORCH_CPU_BYTES
+    if include_asr:
+        total += ASR_DEPENDENCIES_BYTES
+    return total
 
 
 def estimate_install_required_bytes(device: str) -> int:
