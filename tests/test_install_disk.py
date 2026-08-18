@@ -11,8 +11,6 @@ from cc_cover.gui_support import (
     FAST_WHISPER_MODELS_BYTES,
     FUNASR_MODELS_BYTES,
     INSTALL_BUFFER_BYTES,
-    InstallProgressSnapshot,
-    InstallProgressTracker,
     RuntimePaths,
     TORCH_CPU_BYTES,
     TORCH_CUDA_BYTES,
@@ -24,7 +22,6 @@ from cc_cover.gui_support import (
     estimate_install_required_bytes,
     format_size,
     install_download_bytes,
-    install_progress_text,
     local_data_usage,
     model_cache_cleanup_text,
     runtime_paths,
@@ -146,164 +143,6 @@ class DiskPrecheckTests(unittest.TestCase):
 
         self.assertNotIn("空间不足", text)
         self.assertIn("至少需要 2.0 GB", text)
-
-
-class InstallProgressTrackerTests(unittest.TestCase):
-    def test_accumulates_download_header_sizes(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=1024**3, component_count=4)
-        tracker.on_output("Downloading torch-2.5.1-cp312.whl (500.0 MB)\n")
-
-        snapshot = tracker.snapshot(now=10.0)
-
-        self.assertEqual(snapshot.downloaded_bytes, 500 * 1024**2)
-
-    def test_parses_small_units(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=1024**3, component_count=4)
-        tracker.on_output("Downloading six.whl (10 kB)\n")
-
-        self.assertEqual(tracker.snapshot(now=1.0).downloaded_bytes, 10 * 1024)
-
-    def test_multiple_headers_accumulate(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=1024**3, component_count=4)
-        tracker.on_output("Downloading a.whl (100.0 MB)\nDownloading b.whl (50.0 MB)\n")
-
-        self.assertEqual(
-            tracker.snapshot(now=5.0).downloaded_bytes, 150 * 1024**2
-        )
-
-    def test_ignores_non_download_lines(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=1024**3, component_count=4)
-        for line in (
-            "Collecting six\n",
-            "Installing collected packages\n",
-            "Successfully installed six\n",
-        ):
-            tracker.on_output(line)
-
-        self.assertEqual(tracker.snapshot(now=5.0).downloaded_bytes, 0)
-
-    def test_downloaded_capped_at_total(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=100 * 1024**2, component_count=4)
-        tracker.on_output("Downloading huge.whl (500.0 MB)\n")
-
-        snapshot = tracker.snapshot(now=5.0)
-
-        self.assertEqual(snapshot.downloaded_bytes, 100 * 1024**2)
-
-    def test_percent_reflects_completed_components(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=1000 * 1024**2, component_count=4)
-        self.assertEqual(tracker.snapshot(now=5.0).percent, 0)
-
-        tracker.on_component(1)
-        self.assertEqual(tracker.snapshot(now=5.0).percent, 0)
-
-        tracker.on_component(3)
-        self.assertEqual(tracker.snapshot(now=5.0).percent, 50)
-
-    def test_speed_and_remaining_estimated_from_elapsed(self) -> None:
-        tracker = InstallProgressTracker(
-            total_bytes=1000 * 1024**2, component_count=4, started_at=0.0
-        )
-        tracker.on_output("Downloading a.whl (500.0 MB)\n")
-
-        snapshot = tracker.snapshot(now=100.0)
-
-        self.assertAlmostEqual(snapshot.speed_bytes, 5 * 1024**2)
-        self.assertAlmostEqual(snapshot.remaining_seconds, 100.0)
-
-    def test_no_speed_estimate_when_little_time_elapsed(self) -> None:
-        tracker = InstallProgressTracker(
-            total_bytes=1000 * 1024**2, component_count=4, started_at=0.0
-        )
-        tracker.on_output("Downloading a.whl (500.0 MB)\n")
-
-        snapshot = tracker.snapshot(now=1.0)
-
-        self.assertIsNone(snapshot.speed_bytes)
-        self.assertIsNone(snapshot.remaining_seconds)
-
-    def test_no_remaining_estimate_when_downloaded(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=500 * 1024**2, component_count=4)
-        tracker.on_output("Downloading a.whl (500.0 MB)\n")
-
-        snapshot = tracker.snapshot(now=60.0)
-
-        self.assertEqual(snapshot.downloaded_bytes, 500 * 1024**2)
-        self.assertIsNone(snapshot.remaining_seconds)
-
-    def test_zero_total_never_divides_by_zero(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=0, component_count=3)
-        tracker.on_output("Downloading a.whl (10.0 MB)\n")
-
-        snapshot = tracker.snapshot(now=5.0)
-
-        self.assertEqual(snapshot.downloaded_bytes, 0)
-        self.assertEqual(snapshot.percent, 0)
-        self.assertIsNone(snapshot.speed_bytes)
-
-    def test_component_index_tracks_worker_emissions(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=1024**3, component_count=6)
-        tracker.on_component(3)
-
-        self.assertEqual(tracker.snapshot(now=1.0).component_index, 3)
-        self.assertEqual(tracker.snapshot(now=1.0).component_count, 6)
-
-    def test_parses_rich_progress_bar_frame_when_present(self) -> None:
-        tracker = InstallProgressTracker(total_bytes=1024**3, component_count=4)
-        tracker.on_output("\r  45%|##### | 450.0/1000.0 MB [00:10<00:12, 45MB/s]")
-
-        self.assertEqual(tracker.snapshot(now=5.0).downloaded_bytes, 450 * 1024**2)
-
-
-class InstallProgressTextTests(unittest.TestCase):
-    def test_text_contains_component_downloaded_and_remaining(self) -> None:
-        snapshot = InstallProgressSnapshot(
-            component_index=3,
-            component_count=6,
-            downloaded_bytes=300 * 1024**2,
-            total_bytes=900 * 1024**2,
-            percent=33,
-            speed_bytes=5 * 1024**2,
-            remaining_seconds=120.0,
-        )
-
-        text = install_progress_text(snapshot)
-
-        self.assertIn("组件 3/6", text)
-        self.assertIn("已下载约 300.0 MB", text)
-        self.assertIn("约剩余 2 分 0 秒", text)
-
-    def test_text_omits_remaining_when_unavailable(self) -> None:
-        snapshot = InstallProgressSnapshot(
-            component_index=1,
-            component_count=6,
-            downloaded_bytes=10 * 1024**2,
-            total_bytes=900 * 1024**2,
-            percent=1,
-            speed_bytes=None,
-            remaining_seconds=None,
-        )
-
-        text = install_progress_text(snapshot)
-
-        self.assertNotIn("约剩余", text)
-        self.assertIn("已下载约 10.0 MB", text)
-
-    def test_text_omits_downloaded_when_zero(self) -> None:
-        snapshot = InstallProgressSnapshot(
-            component_index=1,
-            component_count=6,
-            downloaded_bytes=0,
-            total_bytes=900 * 1024**2,
-            percent=0,
-            speed_bytes=None,
-            remaining_seconds=None,
-        )
-
-        text = install_progress_text(snapshot)
-
-        self.assertNotIn("已下载约", text)
-        self.assertIn("组件 1/6", text)
 
 
 class LocalCleanupTests(unittest.TestCase):
