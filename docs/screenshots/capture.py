@@ -23,10 +23,7 @@ except Exception:
 import tkinter as tk
 from PIL import ImageGrab
 
-from cc_cover.gui_support import (
-    ensure_data_root,
-    runtime_paths,
-)
+from cc_cover.data_root import ensure_data_root, runtime_paths
 from cc_cover.win_native import SingleInstanceLock
 
 ROOT = Path(__file__).resolve().parents[2]

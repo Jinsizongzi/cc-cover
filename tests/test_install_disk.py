@@ -5,13 +5,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from cc_cover.data_root import RuntimePaths, runtime_paths
 from cc_cover.gui_support import (
     ASR_DEPENDENCIES_BYTES,
     DiskCheck,
     FAST_WHISPER_MODELS_BYTES,
     FUNASR_MODELS_BYTES,
     INSTALL_BUFFER_BYTES,
-    RuntimePaths,
     TORCH_CPU_BYTES,
     TORCH_CUDA_BYTES,
     clean_model_cache,
@@ -24,7 +24,6 @@ from cc_cover.gui_support import (
     install_download_bytes,
     local_data_usage,
     model_cache_cleanup_text,
-    runtime_paths,
 )
 
 

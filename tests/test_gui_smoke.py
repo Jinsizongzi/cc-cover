@@ -10,10 +10,7 @@ try:
 except ImportError:  # ubuntu CI 通常未安装 python3-tk
     tk = None
 
-from cc_cover.gui_support import (
-    ensure_data_root,
-    runtime_paths,
-)
+from cc_cover.data_root import ensure_data_root, runtime_paths
 from cc_cover.win_native import SingleInstanceLock
 
 

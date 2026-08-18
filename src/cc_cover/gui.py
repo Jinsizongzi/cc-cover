@@ -23,6 +23,14 @@ from cc_cover.candidates import (
     scan_confirmation_stats,
     selection_summary,
 )
+from cc_cover.data_root import (
+    RuntimePaths,
+    apply_data_root,
+    default_data_root,
+    ensure_data_root,
+    resolve_data_root,
+    runtime_paths,
+)
 from cc_cover.human_readable import format_duration, format_size
 from cc_cover.progress import (
     FailureInfo,
@@ -51,19 +59,15 @@ from cc_cover.win_native import SingleInstanceLock, focus_existing_window
 from cc_cover.gui_support import (
     CLEANUP_WARNING_BYTES,
     GuiOptions,
-    RuntimePaths,
-    apply_data_root,
     clean_model_cache,
     clear_all_data_text,
     clear_local_data,
     command_environment,
-    default_data_root,
     delete_runs,
     device_probe_commands,
     directory_size,
     disk_precheck,
     disk_precheck_text,
-    ensure_data_root,
     environment_check_command,
     environment_status_label,
     estimate_install_required_bytes,
@@ -76,9 +80,7 @@ from cc_cover.gui_support import (
     play_completion_sound,
     python_candidates,
     resume_command,
-    resolve_data_root,
     runs_total_size,
-    runtime_paths,
     scan_command,
     setup_commands,
     should_play_completion_sound,
