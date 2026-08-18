@@ -199,6 +199,10 @@ GUIDE_TEXT = """操作指南
 CLI 仍支持 --device auto/cuda/cpu。
 • 视频哈希保护：处理前计算视频 SHA-256，安全性更高，但首次扫描大型目录会更慢。
 • FFmpeg：通常无需指定；只有自动检测失败时才选择 ffmpeg.exe。
+• HF Token：可选，用于从 Hugging Face Hub 下载模型时避免未认证请求限流、
+提高下载速度；不填也能正常使用，只是首次下载模型可能受限流影响、速度较慢。
+输入框做了遮挡显示，但保存位置和其他设置项一样是数据根下的 settings.json
+明文文件，没有加密，请勿在共享设备上使用这个功能。
 • 数据目录：默认使用程序所在目录（便携模式），保存运行环境、模型缓存、运行记录与设置文件；
 可在“运行环境”区域点击“更改…”切换，切换后需重新安装运行环境，模型缓存可手动复制。
 • 模型缓存：“运行环境”显示缓存占用，可“打开缓存位置”或“清理模型缓存”（清理后需重新下载）。
@@ -243,6 +247,7 @@ class CCCoverApp(ttk.Frame):
         self.device_auto = settings.device not in GUI_DEVICE_CHOICES
         self.ffmpeg = tk.StringVar(value=settings.ffmpeg)
         self.hash_videos = tk.BooleanVar(value=settings.hash_videos)
+        self.hf_token = tk.StringVar(value=settings.hf_token)
         self.status = tk.StringVar(value="正在检查运行环境…")
         self.environment_status = tk.StringVar(value="检查中")
         self.summary = tk.StringVar(value="尚未选择扫描目录")
@@ -264,6 +269,7 @@ class CCCoverApp(ttk.Frame):
             self.device,
             self.ffmpeg,
             self.hash_videos,
+            self.hf_token,
         ):
             variable.trace_add("write", self._on_settings_changed)
         self.device.trace_add("write", self._on_device_changed)
@@ -458,6 +464,15 @@ class CCCoverApp(ttk.Frame):
         )
         self.clear_all_data_button.grid(
             row=3, column=3, sticky="e", pady=(8, 0)
+        )
+        ttk.Label(
+            environment_panel, text="HF Token（可选）：", style="Body.TLabel"
+        ).grid(row=4, column=0, sticky="w", pady=(8, 0))
+        self.hf_token_entry = ttk.Entry(
+            environment_panel, textvariable=self.hf_token, show="*"
+        )
+        self.hf_token_entry.grid(
+            row=4, column=1, columnspan=2, sticky="ew", padx=(14, 0), pady=(8, 0)
         )
 
         path_panel = self._panel(self.work_tab)
@@ -671,6 +686,7 @@ class CCCoverApp(ttk.Frame):
             device=self.device.get(),
             ffmpeg=self.ffmpeg.get().strip(),
             hash_videos=self.hash_videos.get(),
+            hf_token=self.hf_token.get().strip(),
         )
 
     def _on_settings_changed(self, *_args: Any) -> None:
@@ -759,6 +775,7 @@ class CCCoverApp(ttk.Frame):
             self.hash_check,
             self.ffmpeg_entry,
             self.ffmpeg_button,
+            self.hf_token_entry,
             self.start_button,
             self.resume_button,
             self.cleanup_runs_button,
@@ -787,7 +804,9 @@ class CCCoverApp(ttk.Frame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _process_environment(self) -> dict[str, str]:
-        return command_environment(self.paths)
+        return command_environment(
+            self.paths, hf_token=self.hf_token.get().strip()
+        )
 
     def _run_capture(self, command: list[str]) -> str:
         if self.cancel_requested:

@@ -30,6 +30,7 @@ class GuiSettings:
     device: str = "auto"
     ffmpeg: str = ""
     hash_videos: bool = True
+    hf_token: str = ""
 
 
 def resolve_default_device(saved: str, detected: str | None) -> str:
@@ -88,11 +89,13 @@ def load_gui_settings(data_root: Path) -> GuiSettings:
         device = "auto"
     ffmpeg = values.get("ffmpeg")
     hash_videos = values.get("hash_videos")
+    hf_token = values.get("hf_token")
     return GuiSettings(
         scan_path=str(scan_path) if isinstance(scan_path, str) else "",
         device=device,
         ffmpeg=str(ffmpeg) if isinstance(ffmpeg, str) else "",
         hash_videos=hash_videos if isinstance(hash_videos, bool) else True,
+        hf_token=str(hf_token) if isinstance(hf_token, str) else "",
     )
 
 
@@ -106,6 +109,7 @@ def save_gui_settings(data_root: Path, settings: GuiSettings) -> None:
             "device": settings.device,
             "ffmpeg": settings.ffmpeg,
             "hash_videos": settings.hash_videos,
+            "hf_token": settings.hf_token,
         }
     )
     write_settings(data_root, values)

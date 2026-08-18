@@ -81,6 +81,7 @@ class GuiPreferencesTests(unittest.TestCase):
                 device="cpu",
                 ffmpeg="C:/ffmpeg.exe",
                 hash_videos=False,
+                hf_token="hf_abc123",
             )
 
             save_gui_settings(root, expected)
@@ -90,6 +91,15 @@ class GuiPreferencesTests(unittest.TestCase):
             self.assertIn(
                 "D:/视频", settings_file(root).read_text(encoding="utf-8")
             )
+
+    def test_load_falls_back_to_default_hf_token_for_invalid_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_settings(root, {"hf_token": 123})
+
+            settings = load_gui_settings(root)
+
+        self.assertEqual(settings.hf_token, "")
 
     def test_load_fills_defaults_for_missing_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
