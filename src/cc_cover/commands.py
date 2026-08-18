@@ -167,6 +167,16 @@ def reinstall_scope(outdated: set[str] | None) -> tuple[bool, bool]:
     return needs_torch, needs_asr
 
 
+def needs_force_reinstall_prompt(outdated: set[str]) -> bool:
+    """环境检查成功、但版本比对显示全部匹配（没有可精简重装的目标）时为 True。
+
+    这种情况下点击"安装 / 修复运行环境"本来会什么都不装，需要给用户一个
+    强制完整重装的逃生舱，用来处理版本号没变但文件本身损坏（磁盘错误、
+    杀软误隔离等）这类版本比对查不出来的问题。
+    """
+    return not outdated
+
+
 def setup_commands(
     paths: RuntimePaths,
     base_python: Sequence[str],

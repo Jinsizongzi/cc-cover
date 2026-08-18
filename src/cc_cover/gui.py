@@ -38,6 +38,7 @@ from cc_cover.commands import (
     device_probe_commands,
     environment_check_command,
     environment_status_label,
+    needs_force_reinstall_prompt,
     outdated_packages,
     parse_installed_versions,
     parsed_device,
@@ -1091,6 +1092,10 @@ class CCCoverApp(ttk.Frame):
                         outdated = None
                     else:
                         outdated = self._outdated_from_check_output(check_output)
+                        if needs_force_reinstall_prompt(
+                            outdated
+                        ) and self._confirm_force_reinstall():
+                            outdated = None
                 commands = setup_commands(
                     self.paths, base_python, device, outdated=outdated
                 )
@@ -1870,12 +1875,57 @@ class CCCoverApp(ttk.Frame):
         excluded_count: int,
         result_queue: queue.Queue[bool],
     ) -> None:
-        dialog = self._result_dialog("确认开始")
+        self._show_confirm_dialog(
+            "确认开始",
+            confirmation_text(candidate_count, excluded_count),
+            confirm_label="开始",
+            result_queue=result_queue,
+        )
+
+    def _confirm_force_reinstall(self) -> bool:
+        """版本比对全部匹配、没有可精简重装的目标时，询问是否强制完整重装。
+
+        用于版本号没变但文件本身损坏（磁盘错误、杀软误隔离等）这类版本比对
+        查不出来的场景——给用户一个手动逃生舱，而不是让"安装 / 修复运行环境"
+        在这种情况下悄悄变成什么都不做。任务已停止时视为取消，跟 _confirm_start
+        保持同一种语义。
+        """
+        result_queue: queue.Queue[bool] = queue.Queue()
+        self.events.put(("confirm_force_reinstall", result_queue))
+        confirmed = result_queue.get()
+        if self.cancel_requested:
+            return False
+        return confirmed
+
+    def _show_confirm_force_reinstall_dialog(
+        self, result_queue: queue.Queue[bool]
+    ) -> None:
+        self._show_confirm_dialog(
+            "强制完整重装？",
+            (
+                "当前依赖版本均已匹配，未检测到需要更新的项。\n\n"
+                "如果怀疑运行环境本身有问题（比如文件损坏），"
+                "可以选择强制完整重装。"
+            ),
+            confirm_label="强制完整重装",
+            result_queue=result_queue,
+        )
+
+    def _show_confirm_dialog(
+        self,
+        title: str,
+        body_text: str,
+        *,
+        confirm_label: str,
+        result_queue: queue.Queue[bool],
+    ) -> None:
+        """两按钮确认框的共用外壳：confirm_label 触发 True，取消/关闭触发 False。"""
+        dialog = self._result_dialog(title)
         body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
         body.pack(fill="x")
         ttk.Label(
             body,
-            text=confirmation_text(candidate_count, excluded_count),
+            text=body_text,
             style="Body.TLabel",
             wraplength=460,
             justify="left",
@@ -1894,7 +1944,7 @@ class CCCoverApp(ttk.Frame):
         actions.pack(fill="x")
         ttk.Button(
             actions,
-            text="开始",
+            text=confirm_label,
             style="Primary.TButton",
             command=confirm,
         ).pack(side="right")
@@ -2193,6 +2243,8 @@ class CCCoverApp(ttk.Frame):
                     self._show_confirm_start_dialog(
                         candidate_count, excluded_count, result_queue
                     )
+                elif event == "confirm_force_reinstall":
+                    self._show_confirm_force_reinstall_dialog(payload)
                 elif event == "status":
                     self.status.set(str(payload))
                 elif event == "scan_report":

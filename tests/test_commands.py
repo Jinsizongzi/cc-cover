@@ -17,6 +17,7 @@ from cc_cover.commands import (
     device_probe_commands,
     environment_check_command,
     environment_status_label,
+    needs_force_reinstall_prompt,
     nvidia_probe_command,
     outdated_packages,
     parse_installed_versions,
@@ -439,6 +440,13 @@ class VersionConsistencyTests(unittest.TestCase):
 
     def test_reinstall_scope_mixed(self) -> None:
         self.assertEqual(reinstall_scope({"torch", "numpy"}), (True, True))
+
+    def test_needs_force_reinstall_prompt_when_nothing_outdated(self) -> None:
+        self.assertTrue(needs_force_reinstall_prompt(set()))
+
+    def test_no_force_reinstall_prompt_when_something_outdated(self) -> None:
+        self.assertFalse(needs_force_reinstall_prompt({"funasr"}))
+        self.assertFalse(needs_force_reinstall_prompt({"torch", "torchaudio"}))
 
 
 if __name__ == "__main__":
