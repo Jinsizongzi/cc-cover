@@ -2186,29 +2186,6 @@ class CCCoverApp(ttk.Frame):
                     )
                     if repair:
                         self.setup_environment()
-                elif event == "idle":
-                    self._set_busy(False, str(payload))
-                elif event == "done":
-                    title, message, run_dir = payload
-                    session_elapsed = self._session_elapsed()
-                    self._set_busy(False, "就绪")
-                    if run_dir is not None:
-                        stats = run_completion_stats(run_dir)
-                        if should_play_completion_sound(session_elapsed):
-                            self.after(0, play_completion_sound)
-                        self._show_done_dialog(title, message, run_dir, stats)
-                    else:
-                        self._show_done_dialog(title, message, None)
-                elif event == "cancelled":
-                    info = payload
-                    self._set_busy(False, "任务已停止")
-                    self._append_log(stopped_message(info) + "\n")
-                    self._show_stopped_dialog(info)
-                elif event == "error":
-                    title, info = payload
-                    self._set_busy(False, "发生错误")
-                    self._append_log(f"\n错误：{info.reason}\n")
-                    self._show_failure_dialog(title, self._enrich_failure(info))
         except queue.Empty:
             pass
         self.after(100, self._poll_events)
