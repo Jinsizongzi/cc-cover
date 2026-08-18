@@ -946,40 +946,19 @@ class CCCoverApp(ttk.Frame):
 
     def check_environment(self) -> None:
         def worker() -> None:
-            if not self.paths.venv_python.is_file():
-                self.events.put(("environment", (False, "尚未安装")))
-                self.events.put(("idle", "请先安装运行环境"))
-                self._detect_and_report()
-                return
-            device = self.device.get()
-            try:
+            device = "auto"
+
+            def run() -> None:
+                nonlocal device
+                if not self.paths.venv_python.is_file():
+                    self.events.put(("environment", (False, "尚未安装")))
+                    self.events.put(IdleOutcome("请先安装运行环境"))
+                    self._detect_and_report()
+                    return
+                device = self.device.get()
                 output = self._run_capture(
                     environment_check_command(self.paths, device)
                 )
-            except TaskCancelled as exc:
-                self.events.put(
-                    (
-                        "cancelled",
-                        failure_info_from_command(
-                            [], exc, fallback_stage="环境检查"
-                        ),
-                    )
-                )
-                return
-            except Exception as exc:
-                detail = str(exc).strip() or "需要安装或修复"
-                label = (
-                    "GPU 环境未就绪"
-                    if device == "cuda"
-                    else "需要安装或修复"
-                )
-                self.events.put(("environment", (False, label)))
-                self.events.put(("log", f"环境检查失败：{detail}\n"))
-                self._detect_and_report()
-                if self._prompt_device_recheck:
-                    self._prompt_device_recheck = False
-                    self.events.put(("device_check_failed", label))
-            else:
                 self._prompt_device_recheck = False
                 self.events.put(
                     (
@@ -989,7 +968,36 @@ class CCCoverApp(ttk.Frame):
                 )
                 self.events.put(("log", output + "\n"))
                 self._detect_and_report()
-            self.events.put(("idle", "就绪"))
+                self.events.put(IdleOutcome("就绪"))
+
+            def on_cancel(exc: TaskCancelled) -> None:
+                self.events.put(
+                    CancelledOutcome(
+                        info=failure_info_from_command(
+                            [], exc, fallback_stage="环境检查"
+                        )
+                    )
+                )
+
+            def on_error(exc: Exception) -> None:
+                # 环境未就绪是预期内状态，不当作任务失败：不生成 ErrorOutcome、
+                # 不弹错误对话框，只更新状态后照常落回 idle，跟成功路径一致。
+                # device 复用 run() 读到的值（而不是再读一次 self.device），
+                # 避免 device_detected 事件恰好在两次读取之间被主线程处理、
+                # 导致这里选错提示文案（不受 _set_busy 的按钮禁用保护）。
+                detail = str(exc).strip() or "需要安装或修复"
+                label = (
+                    "GPU 环境未就绪" if device == "cuda" else "需要安装或修复"
+                )
+                self.events.put(("environment", (False, label)))
+                self.events.put(("log", f"环境检查失败：{detail}\n"))
+                self._detect_and_report()
+                if self._prompt_device_recheck:
+                    self._prompt_device_recheck = False
+                    self.events.put(("device_check_failed", label))
+                self.events.put(IdleOutcome("就绪"))
+
+            run_in_background(run, on_cancel=on_cancel, on_error=on_error)
 
         self._start_worker(worker, "正在检查运行环境…")
 
