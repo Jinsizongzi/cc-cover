@@ -10,6 +10,7 @@ from pathlib import Path
 from cc_cover.cli import create_parser
 from cc_cover.commands import (
     ASR_DEPENDENCIES,
+    NOT_INSTALLED_STATUS_LABEL,
     TORCH_VERSION,
     GuiOptions,
     command_environment,
@@ -154,6 +155,10 @@ class CommandConstructionTests(unittest.TestCase):
             environment_status_label("cuda", "CUDA: True", outdated=False),
             "运行环境已就绪（GPU）",
         )
+
+    def test_not_installed_status_hints_at_change_data_root(self) -> None:
+        self.assertIn("尚未安装", NOT_INSTALLED_STATUS_LABEL)
+        self.assertIn("更改", NOT_INSTALLED_STATUS_LABEL)
 
     def test_subprocess_environment_includes_bundled_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

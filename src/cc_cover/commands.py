@@ -379,3 +379,9 @@ def environment_status_label(
 ) -> str:
     base = "运行环境已就绪（GPU）" if accelerator == "cuda" else "运行环境已就绪（CPU）"
     return f"{base}（有更新可用）" if outdated else base
+
+
+NOT_INSTALLED_STATUS_LABEL = (
+    "尚未安装（已有装好的环境？点右侧“更改…”指定位置）"
+)
+"""数据根换过目录后最常见的困惑——旧环境其实还在，只是没指过去。"""

@@ -34,6 +34,7 @@ from cc_cover.candidates import (
 )
 from cc_cover.commands import (
     GuiOptions,
+    NOT_INSTALLED_STATUS_LABEL,
     command_environment,
     device_probe_commands,
     environment_check_command,
@@ -958,7 +959,9 @@ class CCCoverApp(ttk.Frame):
             def run() -> None:
                 nonlocal device
                 if not self.paths.venv_python.is_file():
-                    self.events.put(("environment", (False, "尚未安装")))
+                    self.events.put(
+                        ("environment", (False, NOT_INSTALLED_STATUS_LABEL))
+                    )
                     self.events.put(IdleOutcome("请先安装运行环境"))
                     self._detect_and_report()
                     return
