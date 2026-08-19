@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping
+import tkinter as tk
+from tkinter import ttk
+from typing import Any, Callable, Mapping
 
 
 def scan_confirmation_stats(report: Mapping[str, Any]) -> tuple[int, int]:
@@ -94,3 +96,183 @@ def selection_summary(
         f"已选 {selected_count} 个 · 已排除 {excluded} 个 · "
         f"冲突 {conflict_count} 个 · 受保护非空 TXT {protected_count} 个"
     )
+
+
+class CandidateListPanel:
+    """候选列表屏幕的状态与交互：勾选/排除、冲突标记、右键菜单、统计文案。
+
+    只接收构造时传入的 Treeview 与 BooleanVar，不反过来创建或持有整个
+    CCCoverApp——这样候选列表的状态转换（比如"全选"要不要连带同步）可以
+    脱离完整窗口单独构造、单独测试。
+    """
+
+    def __init__(
+        self,
+        tree: ttk.Treeview,
+        select_all_var: tk.BooleanVar,
+        *,
+        on_change: Callable[[], None] | None = None,
+    ) -> None:
+        self.tree = tree
+        self.select_all_var = select_all_var
+        self._on_change = on_change
+        self.last_report: dict[str, Any] | None = None
+        self.checked_paths: set[str] = set()
+        self.candidate_row_video: dict[str, str] = {}
+        self.original_state_by_row: dict[str, str] = {}
+        self.conflict_row_ids: set[str] = set()
+
+    def load(self, report: dict[str, Any]) -> None:
+        """用一份新的扫描报告重建整张候选列表；默认全选，冲突项单独标记。"""
+        self.last_report = report
+        self.checked_paths.clear()
+        self.candidate_row_video.clear()
+        self.original_state_by_row.clear()
+        self.conflict_row_ids.clear()
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for candidate in report.get("candidates", []):
+            video_path = str(candidate.get("video_path", ""))
+            duration = candidate.get("video_duration_s")
+            size = candidate.get("video_size")
+            estimate = estimate_processing_seconds(duration, size)
+            row_id = self.tree.insert(
+                "",
+                "end",
+                values=(
+                    candidate.get("state", ""),
+                    video_path,
+                    candidate.get("target_path", ""),
+                    format_column_duration(duration),
+                    format_column_size(size),
+                    format_estimate(estimate),
+                    "MM:SS / H:MM:SS",
+                ),
+            )
+            self.candidate_row_video[row_id] = video_path
+            self.original_state_by_row[row_id] = str(candidate.get("state", ""))
+            self.checked_paths.add(video_path)
+            self._set_checkbox(row_id, True)
+        for conflict in report.get("conflicts", []):
+            for video in conflict.get("videos", []):
+                row_id = self.tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        "冲突",
+                        video,
+                        conflict.get("target_path", ""),
+                        "—",
+                        "—",
+                        "—",
+                        "—",
+                    ),
+                    tags=("conflict",),
+                )
+                self.conflict_row_ids.add(row_id)
+        self._sync_select_all()
+        self._notify()
+
+    def _set_checkbox(self, row_id: str, checked: bool) -> None:
+        self.tree.item(row_id, text="☑" if checked else "☐")
+
+    def _set_row_state(self, row_id: str, state: str, tags: tuple[str, ...]) -> None:
+        values = list(self.tree.item(row_id, "values"))
+        values[0] = state
+        self.tree.item(row_id, values=tuple(values), tags=tags)
+
+    def toggle(self, row_id: str) -> None:
+        video = self.candidate_row_video.get(row_id)
+        if video is None:
+            return
+        self._apply_checked(row_id, video not in self.checked_paths)
+        self._sync_select_all()
+        self._notify()
+
+    def toggle_all(self) -> None:
+        select_all = bool(self.select_all_var.get())
+        for row_id in list(self.candidate_row_video):
+            self._apply_checked(row_id, select_all)
+        self._notify()
+
+    def _apply_checked(self, row_id: str, checked: bool) -> None:
+        video = self.candidate_row_video[row_id]
+        self._set_checkbox(row_id, checked)
+        if checked:
+            self.checked_paths.add(video)
+            self._set_row_state(row_id, self.original_state_by_row.get(row_id, ""), ())
+        else:
+            self.checked_paths.discard(video)
+            self._set_row_state(row_id, "已排除", ("excluded",))
+
+    def _sync_select_all(self) -> None:
+        self.select_all_var.set(
+            all(
+                video in self.checked_paths
+                for video in self.candidate_row_video.values()
+            )
+        )
+
+    def _notify(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
+
+    def summary_text(self) -> str:
+        report = self.last_report or {}
+        return selection_summary(
+            video_count=int(report.get("video_count", 0)),
+            candidate_count=int(report.get("candidate_count", 0)),
+            selected_count=len(self.checked_paths),
+            conflict_count=int(report.get("conflict_count", 0)),
+            protected_count=int(report.get("protected_nonempty_txt_count", 0)),
+        )
+
+    def excluded_paths(self) -> list[str]:
+        return sorted(
+            video
+            for row_id, video in self.candidate_row_video.items()
+            if video not in self.checked_paths
+        )
+
+    def is_conflict(self, row_id: str) -> bool:
+        return row_id in self.conflict_row_ids
+
+    def on_click(self, event: Any) -> None:
+        row_id = self.tree.identify_row(event.y)
+        if not row_id or row_id in self.conflict_row_ids:
+            return
+        if self.tree.identify_column(event.x) != "#0":
+            return
+        self.toggle(row_id)
+
+    def show_context_menu(
+        self, master: tk.Misc, event: Any, *, open_in_explorer: Callable[[str], None]
+    ) -> None:
+        row_id = self.tree.identify_row(event.y)
+        if not row_id:
+            return
+        self.tree.selection_set(row_id)
+        self.tree.focus(row_id)
+        values = self.tree.item(row_id, "values")
+        video = str(values[1]) if len(values) > 1 else ""
+        target = str(values[2]) if len(values) > 2 else ""
+        menu = tk.Menu(master, tearoff=0)
+        if row_id in self.candidate_row_video:
+            excluded = self.candidate_row_video[row_id] not in self.checked_paths
+            menu.add_command(
+                label="恢复" if excluded else "从本次处理中排除",
+                command=lambda: self.toggle(row_id),
+            )
+            menu.add_separator()
+        menu.add_command(
+            label="打开视频所在位置",
+            command=lambda: open_in_explorer(video),
+        )
+        menu.add_command(
+            label="打开目标 TXT 所在位置",
+            command=lambda: open_in_explorer(target),
+        )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()

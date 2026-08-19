@@ -115,7 +115,7 @@ def main() -> int:
 
     app = CCCoverApp(root, paths, lock)
     _pump(root, 2.0)  # 等待环境检查与缓存显示刷新
-    app._display_report(_sample_report())
+    app.candidates.load(_sample_report())
     _pump(root, 0.8)
 
     OUTPUT.mkdir(parents=True, exist_ok=True)

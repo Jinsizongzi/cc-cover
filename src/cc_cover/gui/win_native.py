@@ -2,12 +2,27 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
-
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _LOCK_FILENAME = "instance.lock"
 _ERROR_ALREADY_EXISTS = 183
+
+
+def open_in_explorer(path_value: str) -> None:
+    """在资源管理器里定位并选中该文件；找不到 explorer 时退化为打开父目录。"""
+    if not path_value:
+        return
+    path = Path(path_value)
+    try:
+        subprocess.Popen(
+            ["explorer", "/select,", str(path)],
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except OSError:
+        os.startfile(str(path.parent))
 
 
 class SingleInstanceLock:

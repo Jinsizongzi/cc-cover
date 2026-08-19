@@ -8,12 +8,18 @@ import tempfile
 import threading
 import time
 import tkinter as tk
-from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Callable
 
 from cc_cover import __version__
+from cc_cover.core.pipeline import (
+    PipelineError,
+    load_optional_json,
+    run_completion_stats,
+    run_status_label,
+    write_summary,
+)
 from cc_cover.gui.background import (
     CancelledOutcome,
     DoneOutcome,
@@ -23,18 +29,9 @@ from cc_cover.gui.background import (
     WorkerOutcome,
     run_in_background,
 )
-from cc_cover.gui.candidate_list import (
-    confirmation_text,
-    estimate_processing_seconds,
-    format_column_duration,
-    format_column_size,
-    format_estimate,
-    scan_confirmation_stats,
-    selection_summary,
-)
+from cc_cover.gui.candidate_list import CandidateListPanel, scan_confirmation_stats
 from cc_cover.gui.commands import (
     NOT_INSTALLED_STATUS_LABEL,
-    command_environment,
     device_probe_commands,
     environment_check_command,
     environment_status_label,
@@ -50,9 +47,9 @@ from cc_cover.gui.commands import (
     scan_command,
     setup_commands,
     should_play_completion_sound,
-    terminate_process_tree,
     transcribe_command,
 )
+from cc_cover.gui.content import FEATURE_TEXT, GUIDE_TEXT
 from cc_cover.gui.data_root import (
     RuntimePaths,
     apply_data_root,
@@ -61,21 +58,17 @@ from cc_cover.gui.data_root import (
     resolve_data_root,
     runtime_paths,
 )
-from cc_cover.gui.human_readable import format_duration, format_size, strip_ansi_escapes
+from cc_cover.gui.dialogs import DialogHost, enrich_failure
+from cc_cover.gui.human_readable import format_size, strip_ansi_escapes
 from cc_cover.gui.progress import (
-    FailureInfo,
     InstallProgressTracker,
     ProgressTracker,
-    done_event_present,
-    error_text,
     failure_info_from_command,
     failure_info_from_run,
-    first_failed_sample,
     install_progress_text,
     parse_event_line,
     progress_text,
     run_dir_from_events,
-    run_is_resumable,
     stopped_message,
 )
 from cc_cover.gui.settings import (
@@ -102,17 +95,12 @@ from cc_cover.gui.storage import (
     model_cache_cleanup_text,
     runs_total_size,
 )
-from cc_cover.gui.win_native import SingleInstanceLock, focus_existing_window
-from cc_cover.core.pipeline import (
-    SUMMARY_FILENAME,
-    CompletionStats,
-    PipelineError,
-    load_optional_json,
-    run_completion_stats,
-    run_status_label,
-    write_summary,
+from cc_cover.gui.tasks import TaskRunner
+from cc_cover.gui.win_native import (
+    SingleInstanceLock,
+    focus_existing_window,
+    open_in_explorer,
 )
-
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BACKGROUND = "#f5f7fb"
@@ -126,97 +114,6 @@ WARNING = "#b54708"
 ERROR = "#b42318"
 
 
-FEATURE_TEXT = """核心功能
-
-1. 全量扫描
-所有视频默认都是候选：无论同名 TXT 是否存在、是否为空或已有内容，
-都会重新生成并在校验通过后覆盖；与视频不同名的 TXT 不会被触碰。
-
-2. 双模型字幕生成
-FunASR 负责中文正文与句级时间戳；faster-whisper 作为第二模型负责匹配、差异分析与风险审计。
-
-3. 固定输出格式
-字幕固定输出为 MM:SS / H:MM:SS 时间戳加字幕文字，段间空一行；
-UTF-8 无 BOM、CRLF 换行、末尾换行。
-
-4. 自动替换字幕
-点击“开始补全并替换”后，完成扫描、识别、质量与格式校验并原子替换目标 TXT，无需额外写回参数。
-
-5. 冲突检测
-发现阶段检测同 stem 多视频指向同一目标 TXT 的冲突，标记“冲突”并默认排除，报告列出相关视频。
-
-6. 候选勾选与排除
-候选列表提供复选框与“全选”（默认全选）；右键可“从本次处理中排除 / 恢复”、打开视频或目标 TXT 所在位置。被排除候选显示“已排除”，本次不处理、不写回。列表同时展示视频时长、文件大小与粗估处理时间。
-
-7. 写回保护
-处理前记录视频和字幕快照；写回前复核文件状态；写回时先保存备份；批量写回失败会自动回滚。
-
-8. 可恢复运行
-模型结果、审计报告、待写字幕、备份和复核报告都会保存在运行目录。中断后可通过“继续中断任务”选择运行目录继续。
-
-9. 本地处理
-视频、音频和字幕均在本机处理。只有首次安装依赖或首次下载模型时需要联网。"""
-
-
-GUIDE_TEXT = """操作指南
-
-首次使用
-
-1. 打开 CC-Cover.exe；若程序所在目录不可写（如安装到 Program Files），会先引导选择数据目录。
-2. 软件会自动检测运行设备（默认 NVIDIA GPU，否则 CPU），可在“运行环境”区域手动切换。
-3. 点击“安装 / 修复运行环境”。软件会先检查目标盘剩余空间（按所选设备与默认模型估算），
-不足时提示所需与剩余并建议先清理运行目录；
-安装期间显示当前组件、已下载大小与按速度粗估的剩余时间。
-4. 等待状态显示“运行环境已就绪”。首次安装耗时取决于网络速度。
-5. 切换运行设备后会自动复检环境；如果当前环境不匹配所选设备，会提示重新安装 / 修复运行环境。
-
-同一数据目录只允许一个实例运行；若软件已在运行，再次启动会提示
-“CC-Cover 已在运行”并退出，同时尝试切换到已打开的窗口。
-
-补全字幕
-
-1. 点击“选择文件夹”，选择需要处理的视频目录。软件不会预设任何扫描路径。
-2. 选择目录后会自动进行快速扫描，也可以点击“重新扫描”。
-3. 在候选列表中通过复选框勾选本次要处理的视频（默认全选）；右键可排除 / 恢复、打开视频或目标 TXT 所在位置；冲突项会标记“冲突”，默认不会处理。列表会显示视频时长、文件大小与粗估处理时间。
-4. 根据需要调整运行设备、视频哈希保护与 FFmpeg 路径。
-5. 点击“开始补全并替换”。软件会先弹出确认框（将处理 N 个视频并替换同名 TXT，含已排除数量，
-替换前自动备份）；确认后自动完成双模型识别、审计、格式化、备份、替换和最终复核。
-6. 进度条显示「第 N / 共 M 个」、百分比、已用时长与粗估剩余时间；在“运行日志”页查看明细。
-7. 完成后弹窗显示总耗时、写回数量与告警数量（点击查看 summary.txt），并可打开本次运行目录；
-每次运行都会在运行目录生成 summary.txt 摘要。
-
-中断恢复
-
-1. 运行期间可随时点击“停止当前任务”（扫描、环境检查、转写、写回均支持）。
-2. 主动停止不会弹出错误框，而是提示“任务已停止，产物已暂存，可点击‘继续中断任务’恢复”。
-3. 失败或停止后可点击“继续中断任务”恢复，软件复用已完成的模型结果，并在校验通过后继续写回。
-4. 也可以点击“打开运行目录”查看运行产物与日志；
-“运行目录清理”入口可查看运行记录（时间/状态/大小）并按需删除，总占用超 5GB 时提示建议清理。
-
-选项说明
-
-• 运行设备：自动检测（默认 NVIDIA GPU，否则 CPU），可在“运行环境”区域切换。
-CLI 仍支持 --device auto/cuda/cpu。
-• 视频哈希保护：处理前计算视频 SHA-256，安全性更高，但首次扫描大型目录会更慢。
-• FFmpeg：通常无需指定；只有自动检测失败时才选择 ffmpeg.exe。
-• HF Token：可选，用于从 Hugging Face Hub 下载模型时避免未认证请求限流、
-提高下载速度；不填也能正常使用，只是首次下载模型可能受限流影响、速度较慢。
-输入框做了遮挡显示，但保存位置和其他设置项一样是数据根下的 settings.json
-明文文件，没有加密，请勿在共享设备上使用这个功能。
-• 数据目录：默认使用程序所在目录（便携模式），保存运行环境、模型缓存、运行记录与设置文件；
-可在“运行环境”区域点击“更改…”切换，切换后需重新安装运行环境，模型缓存可手动复制。
-• 模型缓存：“运行环境”显示缓存占用，可“打开缓存位置”或“清理模型缓存”（清理后需重新下载）。
-• 清理全部本地数据：删除运行环境、模型缓存、运行记录与临时文件，删除前确认并显示总占用，
-删除后需重新安装运行环境并重新下载模型。
-
-注意事项
-
-• 点击开始后，校验通过的同名 TXT 会被直接替换或创建。
-• 不要在运行期间移动、改名或编辑候选视频和 TXT。
-• 首次运行模型会下载较大的模型文件，请保持网络稳定和足够磁盘空间。
-• 软件关闭前会提示是否停止正在运行的任务。"""
-
-
 class CCCoverApp(ttk.Frame):
     def __init__(self, master: tk.Tk, paths: RuntimePaths, lock: SingleInstanceLock):
         super().__init__(master, padding=0)
@@ -224,17 +121,10 @@ class CCCoverApp(ttk.Frame):
         self.paths = paths
         self.lock = lock
         self.default_root = default_data_root()
-        self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
-        self.process: subprocess.Popen[str] | None = None
+        self.events: queue.Queue[tuple[str, Any] | WorkerOutcome] = queue.Queue()
+        self.tasks = TaskRunner(self.paths, self.events)
         self.busy = False
-        self.cancel_requested = False
-        self.stop_triggered = False
         self.environment_ready = False
-        self.last_report: dict[str, Any] | None = None
-        self.checked_paths: set[str] = set()
-        self.candidate_row_video: dict[str, str] = {}
-        self.original_state_by_row: dict[str, str] = {}
-        self.conflict_row_ids: set[str] = set()
 
         settings = self._load_settings()
         self._saved_device = settings.device
@@ -260,6 +150,28 @@ class CCCoverApp(ttk.Frame):
         self._configure_window()
         self._configure_styles()
         self._build_interface()
+
+        self.candidates = CandidateListPanel(
+            self.candidate_tree, self.select_all_var, on_change=self._refresh_summary
+        )
+        self.candidate_tree.bind(
+            "<Button-1>", lambda event: self.candidates.on_click(event)
+        )
+        self.candidate_tree.bind(
+            "<Button-3>",
+            lambda event: self.candidates.show_context_menu(
+                self.master, event, open_in_explorer=open_in_explorer
+            ),
+        )
+        self.dialogs = DialogHost(
+            self.master,
+            notebook=self.notebook,
+            log_tab=self.log_tab,
+            runs_root=self.paths.runs_root,
+            open_directory=self._open_directory,
+            resume_run_dir=self._resume_run_dir,
+        )
+
         for variable in (
             self.scan_path,
             self.device,
@@ -533,7 +445,7 @@ class CCCoverApp(ttk.Frame):
             selection_row,
             text="全选",
             variable=self.select_all_var,
-            command=self._toggle_select_all,
+            command=lambda: self.candidates.toggle_all(),
         ).pack(side="right")
         columns = (
             "state",
@@ -567,8 +479,6 @@ class CCCoverApp(ttk.Frame):
         self.candidate_tree.column("format", width=100, stretch=False)
         self.candidate_tree.tag_configure("excluded", foreground=MUTED)
         self.candidate_tree.tag_configure("conflict", foreground=ERROR)
-        self.candidate_tree.bind("<Button-1>", self._on_candidate_click)
-        self.candidate_tree.bind("<Button-3>", self._on_candidate_menu)
         scrollbar = ttk.Scrollbar(
             candidate_panel, orient="vertical", command=self.candidate_tree.yview
         )
@@ -776,75 +686,20 @@ class CCCoverApp(ttk.Frame):
     ) -> None:
         if self.busy:
             return
-        self.cancel_requested = False
-        self.stop_triggered = False
+        self.tasks.reset()
         self._set_busy(True, status)
         if log_tab:
             self.notebook.select(self.log_tab)
         threading.Thread(target=worker, daemon=True).start()
 
-    def _process_environment(self) -> dict[str, str]:
-        return command_environment(self.paths, hf_token=self.hf_token.get().strip())
-
-    def _run_capture(self, command: list[str]) -> str:
-        if self.cancel_requested:
-            raise TaskCancelled("任务已由用户停止。")
-        process = subprocess.Popen(
-            command,
-            cwd=str(self.paths.data_root),
-            env=self._process_environment(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=CREATE_NO_WINDOW,
-        )
-        self.process = process
-        assert process.stdout is not None
-        return self._finish_process(process, "".join(process.stdout))
-
-    def _run_streaming(self, command: list[str]) -> str:
-        if self.cancel_requested:
-            raise TaskCancelled("任务已由用户停止。")
-        self.events.put(("log", "\n▶ " + " ".join(command[1:]) + "\n"))
-        process = subprocess.Popen(
-            command,
-            cwd=str(self.paths.data_root),
-            env=self._process_environment(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=CREATE_NO_WINDOW,
-        )
-        self.process = process
-        assert process.stdout is not None
-        lines: list[str] = []
-        for line in process.stdout:
-            lines.append(line)
-            self.events.put(("log", line))
-        return self._finish_process(process, "".join(lines))
-
-    def _finish_process(self, process: subprocess.Popen[str], output: str) -> str:
-        return_code = process.wait()
-        self.process = None
-        if self.stop_triggered:
-            raise TaskCancelled(
-                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
-            )
-        if self.cancel_requested and return_code != 0:
-            raise TaskCancelled(
-                output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
-            )
-        if return_code != 0 and not done_event_present(output):
-            raise RuntimeError(output.strip() or f"任务执行失败，退出代码：{return_code}")
-        return output
+    def _hf_token_value(self) -> str:
+        return self.hf_token.get().strip()
 
     def _scan_report(self, root: Path, settings: GuiSettings) -> dict[str, Any]:
         self.events.put(("status", "正在扫描目录…"))
-        output = self._run_capture(scan_command(self.paths, root, settings))
+        output = self.tasks.run_capture(
+            scan_command(self.paths, root, settings), hf_token=self._hf_token_value()
+        )
         try:
             report = json.loads(output)
         except json.JSONDecodeError as exc:
@@ -918,6 +773,8 @@ class CCCoverApp(ttk.Frame):
             messagebox.showerror("更改数据根失败", str(exc), parent=self.master)
             return
         self.paths = runtime_paths(data_root=new_root)
+        self.tasks.paths = self.paths
+        self.dialogs.runs_root = self.paths.runs_root
         try:
             ensure_data_root(self.paths)
         except OSError as exc:
@@ -956,8 +813,9 @@ class CCCoverApp(ttk.Frame):
                     self._detect_and_report()
                     return
                 device = self.device.get()
-                output = self._run_capture(
-                    environment_check_command(self.paths, device)
+                output = self.tasks.run_capture(
+                    environment_check_command(self.paths, device),
+                    hf_token=self._hf_token_value(),
                 )
                 self._prompt_device_recheck = False
                 has_update = bool(self._outdated_from_check_output(output))
@@ -1011,7 +869,9 @@ class CCCoverApp(ttk.Frame):
         detected: str | None = None
         for command in device_probe_commands(self.paths):
             try:
-                output = self._run_capture(command)
+                output = self.tasks.run_capture(
+                    command, hf_token=self._hf_token_value()
+                )
             except Exception:
                 continue
             detected = parsed_device(output) or parsed_nvidia_probe(output)
@@ -1070,8 +930,9 @@ class CCCoverApp(ttk.Frame):
                 outdated: set[str] | None = None
                 if self.paths.venv_python.is_file():
                     try:
-                        check_output = self._run_capture(
-                            environment_check_command(self.paths, device)
+                        check_output = self.tasks.run_capture(
+                            environment_check_command(self.paths, device),
+                            hf_token=self._hf_token_value(),
                         )
                     except TaskCancelled:
                         raise
@@ -1083,9 +944,10 @@ class CCCoverApp(ttk.Frame):
                         outdated = None
                     else:
                         outdated = self._outdated_from_check_output(check_output)
-                        if needs_force_reinstall_prompt(
-                            outdated
-                        ) and self._confirm_force_reinstall():
+                        if (
+                            needs_force_reinstall_prompt(outdated)
+                            and self._confirm_force_reinstall()
+                        ):
                             outdated = None
                 commands = setup_commands(
                     self.paths, base_python, device, outdated=outdated
@@ -1116,12 +978,15 @@ class CCCoverApp(ttk.Frame):
                     self.events.put(
                         ("status", f"正在安装组件 {index}/{len(commands)}…")
                     )
-                    self.events.put(
-                        ("install_component", (index, len(commands)))
+                    self.events.put(("install_component", (index, len(commands))))
+                    chunks.append(
+                        self.tasks.run_streaming(
+                            command, hf_token=self._hf_token_value()
+                        )
                     )
-                    chunks.append(self._run_streaming(command))
-                output = self._run_capture(
-                    environment_check_command(self.paths, device)
+                output = self.tasks.run_capture(
+                    environment_check_command(self.paths, device),
+                    hf_token=self._hf_token_value(),
                 )
                 chunks.append(output)
                 self.events.put(("log", output + "\n"))
@@ -1206,7 +1071,7 @@ class CCCoverApp(ttk.Frame):
         except ValueError as exc:
             messagebox.showerror("无法开始", str(exc), parent=self.master)
             return
-        excluded_paths = self._excluded_video_paths()
+        excluded_paths = self.candidates.excluded_paths()
 
         def worker() -> None:
             chunks: list[str] = []
@@ -1239,8 +1104,8 @@ class CCCoverApp(ttk.Frame):
                         encoding="utf-8",
                     )
                 # 报告自带排除（同 stem 冲突）+ 本次 GUI 勾选排除，合计为已排除数。
-                excluded_count = (
-                    scan_confirmation_stats(report)[1] + len(excluded_matches)
+                excluded_count = scan_confirmation_stats(report)[1] + len(
+                    excluded_matches
                 )
                 if count == 0:
                     self.events.put(
@@ -1264,13 +1129,14 @@ class CCCoverApp(ttk.Frame):
                 self.events.put(("progress_start", count))
                 self.events.put(("status", "正在生成并替换字幕…"))
                 chunks.append(
-                    self._run_streaming(
+                    self.tasks.run_streaming(
                         transcribe_command(
                             self.paths,
                             root,
                             settings,
                             exclude_file=exclude_file,
-                        )
+                        ),
+                        hf_token=self._hf_token_value(),
                     )
                 )
                 run_dir = run_dir_from_events(chunks[-1])
@@ -1351,7 +1217,10 @@ class CCCoverApp(ttk.Frame):
                 if total:
                     self.events.put(("progress_start", total))
                 chunks.append(
-                    self._run_streaming(resume_command(self.paths, run_dir))
+                    self.tasks.run_streaming(
+                        resume_command(self.paths, run_dir),
+                        hf_token=self._hf_token_value(),
+                    )
                 )
                 self.events.put(
                     DoneOutcome(
@@ -1391,11 +1260,7 @@ class CCCoverApp(ttk.Frame):
     def cancel_task(self) -> None:
         if not self.busy:
             return
-        self.cancel_requested = True
-        process = self.process
-        if process is not None and process.poll() is None:
-            self.stop_triggered = True
-            terminate_process_tree(process)
+        self.tasks.cancel()
         self.status.set("正在停止任务…")
         self._append_log("\n用户请求停止当前任务。\n")
 
@@ -1406,7 +1271,7 @@ class CCCoverApp(ttk.Frame):
         if self.busy:
             return
         runs = list_runs(self.paths.runs_root)
-        dialog = self._result_dialog("运行目录清理")
+        dialog = self.dialogs.result_dialog("运行目录清理")
         body = ttk.Frame(dialog, style="Panel.TFrame", padding=(18, 14, 18, 6))
         body.pack(fill="both", expand=True)
         ttk.Label(
@@ -1598,243 +1463,8 @@ class CCCoverApp(ttk.Frame):
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
-    def _display_report(self, report: dict[str, Any]) -> None:
-        self.last_report = report
-        self.checked_paths.clear()
-        self.candidate_row_video.clear()
-        self.original_state_by_row.clear()
-        self.conflict_row_ids.clear()
-        for item in self.candidate_tree.get_children():
-            self.candidate_tree.delete(item)
-        candidates = report.get("candidates", [])
-        for candidate in candidates:
-            video_path = str(candidate.get("video_path", ""))
-            duration = candidate.get("video_duration_s")
-            size = candidate.get("video_size")
-            estimate = estimate_processing_seconds(duration, size)
-            row_id = self.candidate_tree.insert(
-                "",
-                "end",
-                values=(
-                    candidate.get("state", ""),
-                    video_path,
-                    candidate.get("target_path", ""),
-                    format_column_duration(duration),
-                    format_column_size(size),
-                    format_estimate(estimate),
-                    "MM:SS / H:MM:SS",
-                ),
-            )
-            self.candidate_row_video[row_id] = video_path
-            self.original_state_by_row[row_id] = str(
-                candidate.get("state", "")
-            )
-            self.checked_paths.add(video_path)
-            self._set_checkbox(row_id, True)
-        for conflict in report.get("conflicts", []):
-            for video in conflict.get("videos", []):
-                row_id = self.candidate_tree.insert(
-                    "",
-                    "end",
-                    values=(
-                        "冲突",
-                        video,
-                        conflict.get("target_path", ""),
-                        "—",
-                        "—",
-                        "—",
-                        "—",
-                    ),
-                    tags=("conflict",),
-                )
-                self.conflict_row_ids.add(row_id)
-        self._sync_select_all()
-        self._refresh_summary()
-
-    def _set_checkbox(self, row_id: str, checked: bool) -> None:
-        self.candidate_tree.item(row_id, text="☑" if checked else "☐")
-
-    def _set_row_state(self, row_id: str, state: str, tags: tuple[str, ...]) -> None:
-        values = list(self.candidate_tree.item(row_id, "values"))
-        values[0] = state
-        self.candidate_tree.item(row_id, values=tuple(values), tags=tags)
-
-    def _toggle_candidate(self, row_id: str) -> None:
-        video = self.candidate_row_video.get(row_id)
-        if video is None:
-            return
-        self._apply_checked(row_id, video not in self.checked_paths)
-        self._sync_select_all()
-        self._refresh_summary()
-
-    def _toggle_select_all(self) -> None:
-        select_all = bool(self.select_all_var.get())
-        for row_id in list(self.candidate_row_video):
-            self._apply_checked(row_id, select_all)
-        self._refresh_summary()
-
-    def _apply_checked(self, row_id: str, checked: bool) -> None:
-        video = self.candidate_row_video[row_id]
-        self._set_checkbox(row_id, checked)
-        if checked:
-            self.checked_paths.add(video)
-            self._set_row_state(
-                row_id,
-                self.original_state_by_row.get(row_id, ""),
-                (),
-            )
-        else:
-            self.checked_paths.discard(video)
-            self._set_row_state(row_id, "已排除", ("excluded",))
-
-    def _sync_select_all(self) -> None:
-        self.select_all_var.set(
-            all(
-                video in self.checked_paths
-                for video in self.candidate_row_video.values()
-            )
-        )
-
     def _refresh_summary(self) -> None:
-        report = self.last_report or {}
-        self.summary.set(
-            selection_summary(
-                video_count=int(report.get("video_count", 0)),
-                candidate_count=int(report.get("candidate_count", 0)),
-                selected_count=len(self.checked_paths),
-                conflict_count=int(report.get("conflict_count", 0)),
-                protected_count=int(
-                    report.get("protected_nonempty_txt_count", 0)
-                ),
-            )
-        )
-
-    def _excluded_video_paths(self) -> list[str]:
-        return sorted(
-            video
-            for row_id, video in self.candidate_row_video.items()
-            if video not in self.checked_paths
-        )
-
-    def _on_candidate_click(self, event: Any) -> None:
-        row_id = self.candidate_tree.identify_row(event.y)
-        if not row_id or row_id in self.conflict_row_ids:
-            return
-        if self.candidate_tree.identify_column(event.x) != "#0":
-            return
-        self._toggle_candidate(row_id)
-
-    def _on_candidate_menu(self, event: Any) -> None:
-        row_id = self.candidate_tree.identify_row(event.y)
-        if not row_id:
-            return
-        self.candidate_tree.selection_set(row_id)
-        self.candidate_tree.focus(row_id)
-        values = self.candidate_tree.item(row_id, "values")
-        video = str(values[1]) if len(values) > 1 else ""
-        target = str(values[2]) if len(values) > 2 else ""
-        menu = tk.Menu(self.master, tearoff=0)
-        if row_id in self.candidate_row_video:
-            excluded = self.candidate_row_video[row_id] not in self.checked_paths
-            menu.add_command(
-                label="恢复" if excluded else "从本次处理中排除",
-                command=lambda: self._toggle_candidate(row_id),
-            )
-            menu.add_separator()
-        menu.add_command(
-            label="打开视频所在位置",
-            command=lambda: self._open_in_explorer(video),
-        )
-        menu.add_command(
-            label="打开目标 TXT 所在位置",
-            command=lambda: self._open_in_explorer(target),
-        )
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-
-    def _open_in_explorer(self, path_value: str) -> None:
-        if not path_value:
-            return
-        path = Path(path_value)
-        try:
-            subprocess.Popen(
-                ["explorer", "/select,", str(path)],
-                creationflags=CREATE_NO_WINDOW,
-            )
-        except OSError:
-            os.startfile(str(path.parent))
-
-    def _enrich_failure(self, info: FailureInfo) -> FailureInfo:
-        if info.run_dir is None:
-            return info
-        if info.file and info.stage != "质量门禁":
-            return info
-        sample = first_failed_sample(info.run_dir)
-        if sample is None:
-            return info
-        video, reason = sample
-        return replace(
-            info,
-            file=info.file or video,
-            reason=reason if info.stage == "质量门禁" else info.reason,
-        )
-
-    def _result_dialog(self, title: str) -> tk.Toplevel:
-        dialog = tk.Toplevel(self.master)
-        dialog.title(title)
-        dialog.configure(background=PANEL)
-        dialog.resizable(False, False)
-        dialog.transient(self.master)
-        dialog.grab_set()
-        dialog.update_idletasks()
-        x = self.master.winfo_rootx() + max(
-            0, (self.master.winfo_width() - dialog.winfo_reqwidth()) // 2
-        )
-        y = self.master.winfo_rooty() + max(
-            0, (self.master.winfo_height() - dialog.winfo_reqheight()) // 3
-        )
-        dialog.geometry(f"+{x}+{y}")
-        return dialog
-
-    def _dialog_row(
-        self, parent: ttk.Frame, row: int, label: str, value: str
-    ) -> None:
-        ttk.Label(parent, text=label, style="Body.TLabel").grid(
-            row=row, column=0, sticky="nw", pady=(4, 0)
-        )
-        ttk.Label(
-            parent,
-            text=value,
-            style="Body.TLabel",
-            wraplength=500,
-            justify="left",
-        ).grid(row=row, column=1, sticky="nw", pady=(4, 0), padx=(10, 0))
-
-    def _copy_error(
-        self, dialog: tk.Toplevel, title: str, info: FailureInfo
-    ) -> None:
-        self.master.clipboard_clear()
-        self.master.clipboard_append(error_text(title, info))
-        dialog.destroy()
-
-    def _view_log(self, dialog: tk.Toplevel) -> None:
-        self.notebook.select(self.log_tab)
-        dialog.destroy()
-
-    def _open_run_dir(self, dialog: tk.Toplevel, info: FailureInfo) -> None:
-        target = info.run_dir if info.run_dir is not None else self.paths.runs_root
-        self._open_directory(target)
-        dialog.destroy()
-
-    def _resume_from_dialog(
-        self, dialog: tk.Toplevel, info: FailureInfo
-    ) -> None:
-        run_dir = info.run_dir
-        dialog.destroy()
-        if run_dir is not None and run_is_resumable(run_dir):
-            self._resume_run_dir(run_dir)
+        self.summary.set(self.candidates.summary_text())
 
     def _open_directory(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
@@ -1856,22 +1486,9 @@ class CCCoverApp(ttk.Frame):
             ("confirm_start", (candidate_count, excluded_count, result_queue))
         )
         confirmed = result_queue.get()
-        if self.cancel_requested:
+        if self.tasks.cancel_requested:
             return False
         return confirmed
-
-    def _show_confirm_start_dialog(
-        self,
-        candidate_count: int,
-        excluded_count: int,
-        result_queue: queue.Queue[bool],
-    ) -> None:
-        self._show_confirm_dialog(
-            "确认开始",
-            confirmation_text(candidate_count, excluded_count),
-            confirm_label="开始",
-            result_queue=result_queue,
-        )
 
     def _confirm_force_reinstall(self) -> bool:
         """版本比对全部匹配、没有可精简重装的目标时，询问是否强制完整重装。
@@ -1884,67 +1501,9 @@ class CCCoverApp(ttk.Frame):
         result_queue: queue.Queue[bool] = queue.Queue()
         self.events.put(("confirm_force_reinstall", result_queue))
         confirmed = result_queue.get()
-        if self.cancel_requested:
+        if self.tasks.cancel_requested:
             return False
         return confirmed
-
-    def _show_confirm_force_reinstall_dialog(
-        self, result_queue: queue.Queue[bool]
-    ) -> None:
-        self._show_confirm_dialog(
-            "强制完整重装？",
-            (
-                "当前依赖版本均已匹配，未检测到需要更新的项。\n\n"
-                "如果怀疑运行环境本身有问题（比如文件损坏），"
-                "可以选择强制完整重装。"
-            ),
-            confirm_label="强制完整重装",
-            result_queue=result_queue,
-        )
-
-    def _show_confirm_dialog(
-        self,
-        title: str,
-        body_text: str,
-        *,
-        confirm_label: str,
-        result_queue: queue.Queue[bool],
-    ) -> None:
-        """两按钮确认框的共用外壳：confirm_label 触发 True，取消/关闭触发 False。"""
-        dialog = self._result_dialog(title)
-        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
-        body.pack(fill="x")
-        ttk.Label(
-            body,
-            text=body_text,
-            style="Body.TLabel",
-            wraplength=460,
-            justify="left",
-        ).pack(anchor="w")
-
-        def confirm() -> None:
-            result_queue.put(True)
-            dialog.destroy()
-
-        def cancel() -> None:
-            result_queue.put(False)
-            dialog.destroy()
-
-        dialog.protocol("WM_DELETE_WINDOW", cancel)
-        actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
-        actions.pack(fill="x")
-        ttk.Button(
-            actions,
-            text=confirm_label,
-            style="Primary.TButton",
-            command=confirm,
-        ).pack(side="right")
-        ttk.Button(
-            actions,
-            text="取消",
-            style="Action.TButton",
-            command=cancel,
-        ).pack(side="right", padx=(0, 8))
 
     def _start_progress(self, total: int) -> None:
         self._session_started_at = time.monotonic()
@@ -2025,178 +1584,6 @@ class CCCoverApp(ttk.Frame):
             return None
         return time.monotonic() - self._session_started_at
 
-    def _open_summary(self, run_dir: Path) -> None:
-        summary = run_dir / SUMMARY_FILENAME
-        try:
-            os.startfile(str(summary))
-        except OSError:
-            messagebox.showwarning(
-                "无法打开运行摘要",
-                f"未找到运行摘要：{summary}",
-                parent=self.master,
-            )
-
-    def _show_failure_dialog(self, title: str, info: FailureInfo) -> None:
-        dialog = self._result_dialog(title)
-        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
-        body.pack(fill="x")
-        body.columnconfigure(1, weight=1)
-        row = 0
-        for label, value in (
-            ("文件：", info.file),
-            ("阶段：", info.stage),
-            ("原因：", info.reason),
-        ):
-            if not value:
-                continue
-            self._dialog_row(body, row, label, value)
-            row += 1
-        if info.run_dir is not None:
-            self._dialog_row(body, row, "运行目录：", str(info.run_dir))
-            row += 1
-        if info.done_count is not None and info.total_count is not None:
-            note = (
-                f"已处理 {info.done_count}/{info.total_count} 个视频，"
-                "全部产物已暂存，可点击「继续中断任务」恢复，已完成的文件不会重跑。"
-            )
-            ttk.Label(
-                body, text=note, style="Body.TLabel", wraplength=500
-            ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
-        actions.pack(fill="x")
-        ttk.Button(
-            actions,
-            text="复制错误信息",
-            style="Action.TButton",
-            command=lambda: self._copy_error(dialog, title, info),
-        ).pack(side="left")
-        ttk.Button(
-            actions,
-            text="查看日志",
-            style="Action.TButton",
-            command=lambda: self._view_log(dialog),
-        ).pack(side="left", padx=(8, 0))
-        ttk.Button(
-            actions,
-            text="打开运行目录",
-            style="Action.TButton",
-            command=lambda: self._open_run_dir(dialog, info),
-        ).pack(side="left", padx=(8, 0))
-        if run_is_resumable(info.run_dir):
-            ttk.Button(
-                actions,
-                text="继续中断任务",
-                style="Action.TButton",
-                command=lambda: self._resume_from_dialog(dialog, info),
-            ).pack(side="right")
-        ttk.Button(
-            actions,
-            text="关闭",
-            style="Action.TButton",
-            command=dialog.destroy,
-        ).pack(side="right", padx=(0, 8))
-
-    def _show_stopped_dialog(self, info: FailureInfo) -> None:
-        dialog = self._result_dialog("任务已停止")
-        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
-        body.pack(fill="x")
-        body.columnconfigure(1, weight=1)
-        resumable = run_is_resumable(info.run_dir)
-        ttk.Label(
-            body,
-            text=stopped_message(info),
-            style="Body.TLabel",
-            wraplength=500,
-        ).grid(row=0, column=0, columnspan=2, sticky="w")
-        if info.run_dir is not None:
-            self._dialog_row(body, 1, "运行目录：", str(info.run_dir))
-        actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
-        actions.pack(fill="x")
-        if resumable:
-            ttk.Button(
-                actions,
-                text="继续中断任务",
-                style="Action.TButton",
-                command=lambda: self._resume_from_dialog(dialog, info),
-            ).pack(side="left")
-        ttk.Button(
-            actions,
-            text="打开运行目录",
-            style="Action.TButton",
-            command=lambda: self._open_run_dir(dialog, info),
-        ).pack(side="left", padx=(8, 0))
-        ttk.Button(
-            actions,
-            text="关闭",
-            style="Action.TButton",
-            command=dialog.destroy,
-        ).pack(side="right")
-
-    def _show_done_dialog(
-        self,
-        title: str,
-        message: str,
-        run_dir: Path | None,
-        stats: CompletionStats | None = None,
-    ) -> None:
-        dialog = self._result_dialog(title)
-        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 18, 20, 6))
-        body.pack(fill="x")
-        body.columnconfigure(1, weight=1)
-        ttk.Label(
-            body,
-            text=message,
-            style="Body.TLabel",
-            wraplength=500,
-            justify="left",
-        ).grid(row=0, column=0, columnspan=2, sticky="w")
-        if stats is not None:
-            self._dialog_row(body, 1, "总耗时：", format_duration(stats.elapsed_seconds))
-            self._dialog_row(
-                body, 2, "写回：", f"{stats.written_count} 个视频已生成并写回"
-            )
-            ttk.Label(body, text="告警：", style="Body.TLabel").grid(
-                row=3, column=0, sticky="nw", pady=(4, 0)
-            )
-            if stats.warning_count:
-                ttk.Button(
-                    body,
-                    text=f"{stats.warning_count} 条（点击查看 summary.txt）",
-                    style="Action.TButton",
-                    command=lambda: self._open_summary(run_dir),
-                ).grid(row=3, column=1, sticky="w", padx=(10, 0), pady=(4, 0))
-            else:
-                ttk.Label(
-                    body,
-                    text="无",
-                    style="Body.TLabel",
-                ).grid(row=3, column=1, sticky="nw", pady=(4, 0), padx=(10, 0))
-            if stats.failed_count:
-                ttk.Label(body, text="处理失败：", style="Body.TLabel").grid(
-                    row=4, column=0, sticky="nw", pady=(4, 0)
-                )
-                ttk.Button(
-                    body,
-                    text=f"{stats.failed_count} 个候选已跳过（点击查看 summary.txt）",
-                    style="Action.TButton",
-                    command=lambda: self._open_summary(run_dir),
-                ).grid(row=4, column=1, sticky="w", padx=(10, 0), pady=(4, 0))
-        actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
-        actions.pack(fill="x")
-        if run_dir is not None:
-            ttk.Button(
-                actions,
-                text="打开本次运行目录",
-                style="Action.TButton",
-                command=lambda: self._open_directory(run_dir),
-            ).pack(side="left")
-        ttk.Button(
-            actions,
-            text="完成",
-            style="Action.TButton",
-            command=dialog.destroy,
-        ).pack(side="right")
-
     def _handle_worker_outcome(self, outcome: WorkerOutcome) -> None:
         match outcome:
             case IdleOutcome(status=status):
@@ -2208,17 +1595,17 @@ class CCCoverApp(ttk.Frame):
                     stats = run_completion_stats(run_dir)
                     if should_play_completion_sound(session_elapsed):
                         self.after(0, play_completion_sound)
-                    self._show_done_dialog(title, message, run_dir, stats)
+                    self.dialogs.show_done_dialog(title, message, run_dir, stats)
                 else:
-                    self._show_done_dialog(title, message, None)
+                    self.dialogs.show_done_dialog(title, message, None)
             case CancelledOutcome(info=info):
                 self._set_busy(False, "任务已停止")
                 self._append_log(stopped_message(info) + "\n")
-                self._show_stopped_dialog(info)
+                self.dialogs.show_stopped_dialog(info)
             case ErrorOutcome(title=title, info=info):
                 self._set_busy(False, "发生错误")
                 self._append_log(f"\n错误：{info.reason}\n")
-                self._show_failure_dialog(title, self._enrich_failure(info))
+                self.dialogs.show_failure_dialog(title, enrich_failure(info))
 
     def _poll_events(self) -> None:
         try:
@@ -2241,15 +1628,15 @@ class CCCoverApp(ttk.Frame):
                     self._on_install_component(index, count)
                 elif event == "confirm_start":
                     candidate_count, excluded_count, result_queue = payload
-                    self._show_confirm_start_dialog(
+                    self.dialogs.show_confirm_start_dialog(
                         candidate_count, excluded_count, result_queue
                     )
                 elif event == "confirm_force_reinstall":
-                    self._show_confirm_force_reinstall_dialog(payload)
+                    self.dialogs.show_confirm_force_reinstall_dialog(payload)
                 elif event == "status":
                     self.status.set(str(payload))
                 elif event == "scan_report":
-                    self._display_report(payload)
+                    self.candidates.load(payload)
                 elif event == "environment":
                     ready, label = payload
                     self.environment_ready = bool(ready)
@@ -2323,9 +1710,7 @@ def main() -> None:
             root.destroy()
             return
         try:
-            active_root = apply_data_root(
-                default_root, resolution.root, Path(selected)
-            )
+            active_root = apply_data_root(default_root, resolution.root, Path(selected))
         except (OSError, SettingsError) as exc:
             messagebox.showerror("无法使用所选目录", str(exc), parent=root)
             root.destroy()
