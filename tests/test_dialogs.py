@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 try:
     import tkinter as tk
@@ -16,6 +17,7 @@ except ImportError:  # ubuntu CI 通常未安装 python3-tk
 from cc_cover.core.pipeline import CompletionStats
 from cc_cover.gui.dialogs import DialogHost, enrich_failure
 from cc_cover.gui.progress import FailureInfo
+from cc_cover.gui.storage import DiskCheck
 
 
 def _run_dir_with_failed_sample(root: Path, *, video: str, errors: list[str]) -> Path:
@@ -161,6 +163,30 @@ class DialogHostTests(unittest.TestCase):
         finally:
             if dialog.winfo_exists():
                 dialog.destroy()
+
+    def test_show_disk_precheck_error_calls_native_showerror(self) -> None:
+        with mock.patch("cc_cover.gui.dialogs.messagebox.showerror") as showerror:
+            self.host.show_disk_precheck_error("磁盘读取失败")
+
+        showerror.assert_called_once_with(
+            "磁盘预检失败", "磁盘读取失败", parent=self.root
+        )
+
+    def test_confirm_low_disk_space_returns_askyesno_result(self) -> None:
+        check = DiskCheck(
+            target=Path("C:/data"),
+            required_bytes=10,
+            free_bytes=1,
+            sufficient=False,
+        )
+        with mock.patch(
+            "cc_cover.gui.dialogs.messagebox.askyesno", return_value=True
+        ) as askyesno:
+            result = self.host.confirm_low_disk_space(check, 0)
+
+        self.assertTrue(result)
+        askyesno.assert_called_once()
+        self.assertEqual(askyesno.call_args.kwargs["parent"], self.root)
 
     def test_failure_dialog_shows_provided_fields_without_resume_button(self) -> None:
         info = FailureInfo(stage="转写", reason="子进程失败", file="a.mp4")

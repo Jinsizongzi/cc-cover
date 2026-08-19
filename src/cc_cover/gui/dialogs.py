@@ -18,6 +18,7 @@ from cc_cover.gui.progress import (
     run_is_resumable,
     stopped_message,
 )
+from cc_cover.gui.storage import DiskCheck, disk_precheck_text
 
 PANEL = "#ffffff"
 
@@ -193,6 +194,21 @@ class DialogHost:
             ),
             confirm_label="强制完整重装",
             result_queue=result_queue,
+        )
+
+    def show_disk_precheck_error(self, message: str) -> None:
+        messagebox.showerror("磁盘预检失败", message, parent=self.master)
+
+    def confirm_low_disk_space(self, check: DiskCheck, runs_bytes: int) -> bool:
+        """磁盘预检发现空间不足时，同步询问是否仍要继续安装。
+
+        调用方须在起后台线程之前（主线程上）调用——跟 show_confirm_dialog
+        那套跨线程 result_queue 协议不同，这里没有线程要跨，直接同步返回。
+        """
+        return messagebox.askyesno(
+            "磁盘空间不足",
+            disk_precheck_text(check, runs_bytes) + "\n\n仍要继续安装吗？",
+            parent=self.master,
         )
 
     def show_failure_dialog(self, title: str, info: FailureInfo) -> None:
