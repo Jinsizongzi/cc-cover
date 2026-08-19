@@ -59,7 +59,7 @@ def runtime_paths(
     is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     if bundle_root is None:
         if is_frozen:
-            bundle_root = Path(str(getattr(sys, "_MEIPASS"))).resolve()
+            bundle_root = Path(str(sys._MEIPASS)).resolve()
         else:
             bundle_root = Path(__file__).resolve().parents[2]
     source_root = (

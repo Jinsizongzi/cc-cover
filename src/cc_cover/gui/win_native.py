@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import subprocess
@@ -136,10 +137,8 @@ class SingleInstanceLock:
 
     def _release_file(self) -> None:
         if self._lock_path is not None:
-            try:
+            with contextlib.suppress(OSError):
                 self._lock_path.unlink()
-            except OSError:
-                pass
             self._lock_path = None
         self.acquired = False
 

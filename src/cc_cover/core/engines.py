@@ -106,9 +106,11 @@ def resolve_device(requested: str, compute_type: str) -> tuple[str, str]:
         import ctranslate2
 
         cuda_available = cuda_available and ctranslate2.get_cuda_device_count() > 0
-    except Exception:
+    except Exception as exc:
         if requested == "cuda":
-            raise EngineError("无法导入 CTranslate2，不能使用 CUDA", phase=Phase.SETUP)
+            raise EngineError(
+                "无法导入 CTranslate2，不能使用 CUDA", phase=Phase.SETUP
+            ) from exc
         cuda_available = False
     if requested == "cuda" and not cuda_available:
         raise EngineError(

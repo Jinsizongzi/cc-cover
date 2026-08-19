@@ -409,10 +409,7 @@ class InstallProgressTracker:
         now = time.monotonic() if now is None else float(now)
         elapsed = max(0.0, now - self.started_at)
         downloaded = max(self._announced_bytes, self._bar_bytes)
-        if self.total_bytes:
-            downloaded = min(downloaded, self.total_bytes)
-        else:
-            downloaded = 0
+        downloaded = min(downloaded, self.total_bytes) if self.total_bytes else 0
         # 进度条百分比按组件完成度计算（已完成组件数 / 总数），避免在
         # 安装收尾阶段因下载量提前到 100% 造成误导；下载细节由文案展示。
         completed = max(0, self.component_index - 1)

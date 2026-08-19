@@ -5,6 +5,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any, Callable, Mapping
 
+from cc_cover.core.formats import format_hms
+
 
 def scan_confirmation_stats(report: Mapping[str, Any]) -> tuple[int, int]:
     """从扫描报告取开始前确认框的统计：(待处理 N, 已排除 M)。
@@ -51,12 +53,7 @@ def format_column_duration(seconds: float | None) -> str:
     """候选列表「时长」列的 H:MM:SS 格式；与进度条的中文 format_duration 区分。"""
     if seconds is None:
         return "—"
-    total = int(round(float(seconds)))
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
+    return format_hms(int(round(float(seconds))))
 
 
 def format_column_size(size_bytes: int | None) -> str:

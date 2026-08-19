@@ -73,13 +73,17 @@ def normalize_text(raw: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def timestamp(start_ms: int) -> str:
-    total_seconds = max(0, start_ms // 1000)
+def format_hms(total_seconds: int) -> str:
+    """非负整数秒格式化为 H:MM:SS（有小时）或 MM:SS（无小时）。"""
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     if hours:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
+
+
+def timestamp(start_ms: int) -> str:
+    return format_hms(max(0, start_ms // 1000))
 
 
 def parse_timestamp(timecode: str) -> int | None:
@@ -145,7 +149,9 @@ def validate_rendered(payload: bytes) -> dict[str, object]:
             index += 1
     if timestamps != sorted(timestamps):
         raise FormatError("时间戳不是单调非递减")
-    gaps = [right - left for left, right in zip(timestamps, timestamps[1:])]
+    gaps = [
+        right - left for left, right in zip(timestamps, timestamps[1:], strict=False)
+    ]
     return {
         "style": "timed",
         "segment_count": len(timestamps),

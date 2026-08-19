@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
@@ -624,10 +625,8 @@ class CCCoverApp(ttk.Frame):
         if self._save_after_id is not None:
             self.after_cancel(self._save_after_id)
             self._save_after_id = None
-        try:
+        with contextlib.suppress(OSError, SettingsError):
             save_gui_settings(self.paths.data_root, self._current_settings())
-        except (OSError, SettingsError):
-            pass
 
     def _selected_root(self) -> Path:
         value = self.scan_path.get().strip().strip('"')
@@ -1173,10 +1172,8 @@ class CCCoverApp(ttk.Frame):
                 run_in_background(run, on_cancel=on_cancel, on_error=on_error)
             finally:
                 if exclude_file is not None:
-                    try:
+                    with contextlib.suppress(OSError):
                         exclude_file.unlink()
-                    except OSError:
-                        pass
 
         self._start_worker(worker, "正在扫描并准备处理…", log_tab=True)
 
@@ -1474,10 +1471,8 @@ class CCCoverApp(ttk.Frame):
         """任务被停止（子进程被终止，execute 的 finally 不会执行）时补写摘要。"""
         if run_dir is None:
             return
-        try:
+        with contextlib.suppress(OSError, PipelineError):
             write_summary(run_dir)
-        except (OSError, PipelineError):
-            pass
 
     def _confirm_start(self, candidate_count: int, excluded_count: int) -> bool:
         """在 GUI 线程弹出开始前确认框并等待结果；任务已停止时视为取消。"""

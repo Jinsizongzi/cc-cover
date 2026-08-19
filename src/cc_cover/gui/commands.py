@@ -259,36 +259,33 @@ def environment_check_command(paths: RuntimePaths, device: str = "cpu") -> list[
     if device not in {"cuda", "cpu"}:
         raise ValueError(f"不支持的设备：{device}")
     require_cuda = "True" if device == "cuda" else "False"
-    return [
-        str(paths.venv_python),
-        "-c",
-        (
-            "import ctranslate2, funasr, faster_whisper, imageio_ffmpeg, torch; "
-            "from importlib.metadata import PackageNotFoundError, version as _pkg_version; "
-            f"_tracked = {TRACKED_PACKAGES!r}\n"
-            "_versions = {}\n"
-            "for _name in _tracked:\n"
-            "    try:\n"
-            "        _versions[_name] = _pkg_version(_name)\n"
-            "    except PackageNotFoundError:\n"
-            "        pass\n"
-            "print('VERSIONS: ' + ' '.join(f'{k}={v}' for k, v in _versions.items())); "
-            f"require_cuda = {require_cuda}; "
-            "cuda_ok = bool(torch.cuda.is_available()); "
-            "ct2_count = int(ctranslate2.get_cuda_device_count()); "
-            "print('环境检查通过'); "
-            "print('PyTorch:', torch.__version__); "
-            "print('CUDA:', cuda_ok); "
-            "print('CTranslate2 CUDA devices:', ct2_count); "
-            "print('FFmpeg:', imageio_ffmpeg.get_ffmpeg_exe()); "
-            "ok = (not require_cuda) or (cuda_ok and ct2_count > 0); "
-            "raise SystemExit("
-            "0 if ok else "
-            "(print('错误：已选择 NVIDIA GPU，但当前环境 CUDA 不可用。"
-            "请确认已安装 NVIDIA 驱动，并重新执行安装 / 修复运行环境。') or 1)"
-            ")"
-        ),
-    ]
+    script = f"""\
+import ctranslate2, funasr, faster_whisper, imageio_ffmpeg, torch
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+_tracked = {TRACKED_PACKAGES!r}
+_versions = {{}}
+for _name in _tracked:
+    try:
+        _versions[_name] = _pkg_version(_name)
+    except PackageNotFoundError:
+        pass
+print('VERSIONS: ' + ' '.join(f'{{k}}={{v}}' for k, v in _versions.items()))
+
+require_cuda = {require_cuda}
+cuda_ok = bool(torch.cuda.is_available())
+ct2_count = int(ctranslate2.get_cuda_device_count())
+print('环境检查通过')
+print('PyTorch:', torch.__version__)
+print('CUDA:', cuda_ok)
+print('CTranslate2 CUDA devices:', ct2_count)
+print('FFmpeg:', imageio_ffmpeg.get_ffmpeg_exe())
+ok = (not require_cuda) or (cuda_ok and ct2_count > 0)
+if not ok:
+    print('错误：已选择 NVIDIA GPU，但当前环境 CUDA 不可用。请确认已安装 NVIDIA 驱动，并重新执行安装 / 修复运行环境。')
+raise SystemExit(0 if ok else 1)
+"""
+    return [str(paths.venv_python), "-c", script]
 
 
 _VERSIONS_LINE_PATTERN = re.compile(r"^VERSIONS:\s*(?P<pairs>.+)$", re.MULTILINE)
