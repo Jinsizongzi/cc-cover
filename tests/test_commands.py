@@ -12,7 +12,6 @@ from cc_cover.commands import (
     ASR_DEPENDENCIES,
     NOT_INSTALLED_STATUS_LABEL,
     TORCH_VERSION,
-    GuiOptions,
     command_environment,
     detect_device_command,
     device_probe_commands,
@@ -32,6 +31,7 @@ from cc_cover.commands import (
     transcribe_command,
 )
 from cc_cover.data_root import runtime_paths
+from cc_cover.settings import GuiSettings
 
 
 class CommandConstructionTests(unittest.TestCase):
@@ -44,13 +44,13 @@ class CommandConstructionTests(unittest.TestCase):
                 data_root=base / "data",
             )
             selected = base / "selected"
-            options = GuiOptions(
+            settings = GuiSettings(
                 device="cpu",
                 hash_videos=True,
-                ffmpeg=base / "ffmpeg.exe",
+                ffmpeg=str(base / "ffmpeg.exe"),
             )
-            scan = scan_command(paths, selected, options)
-            transcribe = transcribe_command(paths, selected, options)
+            scan = scan_command(paths, selected, settings)
+            transcribe = transcribe_command(paths, selected, settings)
 
         create_parser().parse_args(scan[3:])
         create_parser().parse_args(transcribe[3:])
@@ -74,13 +74,13 @@ class CommandConstructionTests(unittest.TestCase):
                 data_root=base / "data",
             )
             selected = base / "selected"
-            options = GuiOptions(
+            settings = GuiSettings(
                 device="cpu",
                 hash_videos=False,
-                ffmpeg=base / "ffmpeg.exe",
+                ffmpeg=str(base / "ffmpeg.exe"),
             )
-            scan = scan_command(paths, selected, options)
-            transcribe = transcribe_command(paths, selected, options)
+            scan = scan_command(paths, selected, settings)
+            transcribe = transcribe_command(paths, selected, settings)
 
         self.assertIn("--no-hash-videos", scan)
         self.assertIn("--no-hash-videos", transcribe)
@@ -94,9 +94,9 @@ class CommandConstructionTests(unittest.TestCase):
                 data_root=base / "data",
             )
             selected = base / "selected"
-            options = GuiOptions(device="cpu")
-            scan = scan_command(paths, selected, options)
-            transcribe = transcribe_command(paths, selected, options)
+            settings = GuiSettings(device="cpu")
+            scan = scan_command(paths, selected, settings)
+            transcribe = transcribe_command(paths, selected, settings)
 
         for command in (scan, transcribe):
             self.assertNotIn("--include-missing", command)
@@ -212,12 +212,12 @@ class CommandConstructionTests(unittest.TestCase):
             )
             selected = base / "selected"
             exclude_file = base / "excluded.json"
-            options = GuiOptions(device="cpu")
-            scan = scan_command(paths, selected, options)
+            settings = GuiSettings(device="cpu")
+            scan = scan_command(paths, selected, settings)
             transcribe = transcribe_command(
                 paths,
                 selected,
-                options,
+                settings,
                 exclude_file=exclude_file,
             )
 

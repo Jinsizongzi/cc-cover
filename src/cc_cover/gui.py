@@ -33,7 +33,6 @@ from cc_cover.candidates import (
     selection_summary,
 )
 from cc_cover.commands import (
-    GuiOptions,
     NOT_INSTALLED_STATUS_LABEL,
     command_environment,
     device_probe_commands,
@@ -673,14 +672,6 @@ class CCCoverApp(ttk.Frame):
         self.log_text.pack(fill="both", expand=True)
         self.log_text.configure(state="disabled")
 
-    def _gui_options(self) -> GuiOptions:
-        ffmpeg_text = self.ffmpeg.get().strip().strip('"')
-        return GuiOptions(
-            device=self.device.get(),
-            hash_videos=self.hash_videos.get(),
-            ffmpeg=Path(ffmpeg_text).resolve() if ffmpeg_text else None,
-        )
-
     def _current_settings(self) -> GuiSettings:
         return GuiSettings(
             scan_path=self.scan_path.get().strip(),
@@ -867,9 +858,9 @@ class CCCoverApp(ttk.Frame):
             raise RuntimeError(output.strip() or f"任务执行失败，退出代码：{return_code}")
         return output
 
-    def _scan_report(self, root: Path, options: GuiOptions) -> dict[str, Any]:
+    def _scan_report(self, root: Path, settings: GuiSettings) -> dict[str, Any]:
         self.events.put(("status", "正在扫描目录…"))
-        output = self._run_capture(scan_command(self.paths, root, options))
+        output = self._run_capture(scan_command(self.paths, root, settings))
         try:
             report = json.loads(output)
         except json.JSONDecodeError as exc:
@@ -1200,14 +1191,14 @@ class CCCoverApp(ttk.Frame):
             return
         try:
             root = self._selected_root()
-            options = self._gui_options()
+            settings = self._current_settings()
         except ValueError as exc:
             messagebox.showerror("路径无效", str(exc), parent=self.master)
             return
 
         def worker() -> None:
             def run() -> None:
-                self._scan_report(root, options)
+                self._scan_report(root, settings)
                 self.events.put(IdleOutcome("扫描完成"))
 
             def on_cancel(exc: TaskCancelled) -> None:
@@ -1234,7 +1225,7 @@ class CCCoverApp(ttk.Frame):
             return
         try:
             root = self._selected_root()
-            options = self._gui_options()
+            settings = self._current_settings()
         except ValueError as exc:
             messagebox.showerror("无法开始", str(exc), parent=self.master)
             return
@@ -1247,7 +1238,7 @@ class CCCoverApp(ttk.Frame):
 
             def run() -> None:
                 nonlocal scanning, exclude_file
-                report = self._scan_report(root, options)
+                report = self._scan_report(root, settings)
                 scanning = False
                 fresh_candidates = report.get("candidates", [])
                 excluded_set = set(excluded_paths)
@@ -1300,7 +1291,7 @@ class CCCoverApp(ttk.Frame):
                         transcribe_command(
                             self.paths,
                             root,
-                            options,
+                            settings,
                             exclude_file=exclude_file,
                         )
                     )

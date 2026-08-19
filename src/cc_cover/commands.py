@@ -4,7 +4,6 @@ import os
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -13,7 +12,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from cc_cover.data_root import RuntimePaths
-from cc_cover.settings import GUI_DEVICE_CHOICES
+from cc_cover.settings import GUI_DEVICE_CHOICES, GuiSettings
 
 TORCH_VERSION = "2.5.1"
 ASR_DEPENDENCIES = (
@@ -31,13 +30,6 @@ TRACKED_PACKAGES: tuple[str, ...] = ("torch", "torchaudio") + tuple(
     Requirement(spec).name for spec in ASR_DEPENDENCIES
 )
 _TORCH_PAIR = frozenset({"torch", "torchaudio"})
-
-
-@dataclass(frozen=True)
-class GuiOptions:
-    device: str = "auto"
-    hash_videos: bool = True
-    ffmpeg: Path | None = None
 
 
 def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
@@ -99,21 +91,22 @@ def command_environment(
     return environment
 
 
-def discovery_arguments(options: GuiOptions, *, preview: bool = False) -> list[str]:
+def discovery_arguments(settings: GuiSettings, *, preview: bool = False) -> list[str]:
     arguments: list[str] = []
-    if preview or not options.hash_videos:
+    if preview or not settings.hash_videos:
         arguments.append("--no-hash-videos")
     return arguments
 
 
-def pipeline_arguments(options: GuiOptions) -> list[str]:
-    arguments = ["--device", options.device]
-    if options.ffmpeg is not None:
-        arguments.extend(["--ffmpeg", str(options.ffmpeg)])
+def pipeline_arguments(settings: GuiSettings) -> list[str]:
+    arguments = ["--device", settings.device]
+    ffmpeg_text = settings.ffmpeg.strip().strip('"')
+    if ffmpeg_text:
+        arguments.extend(["--ffmpeg", str(Path(ffmpeg_text).resolve())])
     return arguments
 
 
-def scan_command(paths: RuntimePaths, root: Path, options: GuiOptions) -> list[str]:
+def scan_command(paths: RuntimePaths, root: Path, settings: GuiSettings) -> list[str]:
     return [
         str(paths.venv_python),
         "-m",
@@ -121,14 +114,14 @@ def scan_command(paths: RuntimePaths, root: Path, options: GuiOptions) -> list[s
         "scan",
         str(root),
         "--json",
-        *discovery_arguments(options, preview=True),
+        *discovery_arguments(settings, preview=True),
     ]
 
 
 def transcribe_command(
     paths: RuntimePaths,
     root: Path,
-    options: GuiOptions,
+    settings: GuiSettings,
     exclude_file: Path | None = None,
 ) -> list[str]:
     return [
@@ -141,8 +134,8 @@ def transcribe_command(
         str(paths.runs_root),
         "--model-cache",
         str(paths.model_cache),
-        *discovery_arguments(options),
-        *pipeline_arguments(options),
+        *discovery_arguments(settings),
+        *pipeline_arguments(settings),
         *(["--exclude", str(exclude_file)] if exclude_file is not None else []),
     ]
 
