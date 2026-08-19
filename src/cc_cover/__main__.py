@@ -1,4 +1,4 @@
-from cc_cover.cli import main
+from cc_cover.core.cli import main
 
 
 raise SystemExit(main())

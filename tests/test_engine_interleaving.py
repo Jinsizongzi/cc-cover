@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from cc_cover.discovery import discover
-from cc_cover.models import Candidate, Segment
-from cc_cover.pipeline import (
+from cc_cover.core.discovery import discover
+from cc_cover.core.models import Candidate, Segment
+from cc_cover.core.pipeline import (
     PipelineOptions,
     SubtitlePipeline,
     options_to_dict,
@@ -92,12 +92,18 @@ class EngineInterleavingTests(unittest.TestCase):
 
             funasr_engine = make_engine("funasr")
             faster_engine = make_engine("faster_whisper")
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
             ):
                 pipeline.execute()
 
@@ -120,18 +126,24 @@ class EngineInterleavingTests(unittest.TestCase):
             pipeline.manifest["phases"]["pilot"] = [sample_ids[0]]
             pipeline.manifest["phases"]["remaining"] = [sample_ids[1]]
 
-            funasr_class = mock.Mock(return_value=mock.Mock(
-                transcribe=mock.Mock(return_value=(list(SEGMENTS), {}))
-            ))
-            faster_class = mock.Mock(return_value=mock.Mock(
-                transcribe=mock.Mock(return_value=(list(SEGMENTS), {}))
-            ))
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", funasr_class
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", faster_class
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
+            funasr_class = mock.Mock(
+                return_value=mock.Mock(
+                    transcribe=mock.Mock(return_value=(list(SEGMENTS), {}))
+                )
+            )
+            faster_class = mock.Mock(
+                return_value=mock.Mock(
+                    transcribe=mock.Mock(return_value=(list(SEGMENTS), {}))
+                )
+            )
+            with (
+                mock.patch("cc_cover.core.pipeline.FunASREngine", funasr_class),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine", faster_class
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
             ):
                 pipeline.execute()
 
@@ -153,10 +165,15 @@ class EngineInterleavingTests(unittest.TestCase):
             funasr_engine = mock.Mock()
             faster_engine = mock.Mock()
             faster_engine.load.side_effect = RuntimeError("显存不足")
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
             ):
                 with self.assertRaises(RuntimeError):
                     pipeline._load_engines_if_needed(
@@ -177,12 +194,18 @@ class EngineInterleavingTests(unittest.TestCase):
             funasr_engine = mock.Mock()
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
             ):
                 pipeline.execute()
 
@@ -198,12 +221,18 @@ class EngineInterleavingTests(unittest.TestCase):
             funasr_engine.transcribe.side_effect = RuntimeError("推理失败")
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
             ):
                 with self.assertRaises(Exception):
                     pipeline.execute()
@@ -222,13 +251,19 @@ class EngineInterleavingTests(unittest.TestCase):
             funasr_engine.transcribe.return_value = (list(SEGMENTS), {})
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
-            ) as extract:
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ) as extract,
+            ):
                 pipeline.execute()
 
             self.assertEqual(extract.call_count, len(videos))

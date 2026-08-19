@@ -6,15 +6,13 @@ import statistics
 import unicodedata
 from typing import Sequence
 
-from cc_cover.models import Segment
+from cc_cover.core.models import Segment
 
 
 # 固定输出格式：MM:SS（不足 1 小时）/ H:MM:SS（满 1 小时，小时不限位数）。
 # 校验按同规则放宽：分钟与小时字段均不限制位数。
 MMSS_TIMESTAMP = re.compile(r"^(?P<minutes>\d+):(?P<seconds>\d{2})$")
-HMMSS_TIMESTAMP = re.compile(
-    r"^(?P<hours>\d+):(?P<minutes>\d{2}):(?P<seconds>\d{2})$"
-)
+HMMSS_TIMESTAMP = re.compile(r"^(?P<hours>\d+):(?P<minutes>\d{2}):(?P<seconds>\d{2})$")
 MODEL_TAG_PATTERN = re.compile(r"<\|[^|>]+\|>")
 REMOVED_PUNCTUATION = frozenset("，。！？；：、…“”‘’《》【】,.!?;:")
 
@@ -27,9 +25,17 @@ def decode_bytes(payload: bytes) -> tuple[str, str, bool]:
     if payload.startswith(codecs.BOM_UTF8):
         return payload[len(codecs.BOM_UTF8) :].decode("utf-8"), "utf-8", True
     if payload.startswith(codecs.BOM_UTF16_LE):
-        return payload[len(codecs.BOM_UTF16_LE) :].decode("utf-16-le"), "utf-16-le", True
+        return (
+            payload[len(codecs.BOM_UTF16_LE) :].decode("utf-16-le"),
+            "utf-16-le",
+            True,
+        )
     if payload.startswith(codecs.BOM_UTF16_BE):
-        return payload[len(codecs.BOM_UTF16_BE) :].decode("utf-16-be"), "utf-16-be", True
+        return (
+            payload[len(codecs.BOM_UTF16_BE) :].decode("utf-16-be"),
+            "utf-16-be",
+            True,
+        )
     for encoding in ("utf-8", "gb18030"):
         try:
             return payload.decode(encoding), encoding, False

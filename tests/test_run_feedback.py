@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cc_cover.pipeline import CompletionStats, run_completion_stats
+from cc_cover.core.pipeline import CompletionStats, run_completion_stats
 
 
 class CompletionStatsTests(unittest.TestCase):

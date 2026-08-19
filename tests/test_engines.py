@@ -7,7 +7,7 @@ import wave
 from pathlib import Path
 from types import SimpleNamespace
 
-from cc_cover.engines import (
+from cc_cover.core.engines import (
     EngineError,
     FasterWhisperEngine,
     extract_audio,
@@ -15,7 +15,7 @@ from cc_cover.engines import (
     probe_duration,
     resolve_device,
 )
-from cc_cover.models import Phase, PipelineOptions
+from cc_cover.core.models import Phase, PipelineOptions
 
 
 def raw_segment(start: float, end: float, text: str = "hello") -> SimpleNamespace:
@@ -118,10 +118,8 @@ class FasterWhisperEngineTests(unittest.TestCase):
         ]
         engine = self._engine(raw_segments)
 
-        with self.assertLogs("cc_cover.engines", level="WARNING") as logs:
-            segments, metadata = engine.transcribe(
-                Path("audio.wav"), 551.701312, []
-            )
+        with self.assertLogs("cc_cover.core.engines", level="WARNING") as logs:
+            segments, metadata = engine.transcribe(Path("audio.wav"), 551.701312, [])
 
         self.assertEqual([segment.text for segment in segments], ["normal"])
         self.assertEqual(metadata["segment_count"], 1)
@@ -157,9 +155,7 @@ class FasterWhisperEngineTests(unittest.TestCase):
         self,
     ) -> None:
         """旧版本 faster-whisper 不支持 hotwords 参数时，仍然靠 initial_prompt 兜底。"""
-        engine = self._engine_without_hotwords_support(
-            [raw_segment(0.0, 5.0, "hello")]
-        )
+        engine = self._engine_without_hotwords_support([raw_segment(0.0, 5.0, "hello")])
 
         engine.transcribe(Path("audio.wav"), 5.0, ["PyTorch", "Django"])
 

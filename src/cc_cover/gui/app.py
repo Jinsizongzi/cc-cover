@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Any, Callable
 
 from cc_cover import __version__
-from cc_cover.background import (
+from cc_cover.gui.background import (
     CancelledOutcome,
     DoneOutcome,
     ErrorOutcome,
@@ -23,7 +23,7 @@ from cc_cover.background import (
     WorkerOutcome,
     run_in_background,
 )
-from cc_cover.candidates import (
+from cc_cover.gui.candidate_list import (
     confirmation_text,
     estimate_processing_seconds,
     format_column_duration,
@@ -32,7 +32,7 @@ from cc_cover.candidates import (
     scan_confirmation_stats,
     selection_summary,
 )
-from cc_cover.commands import (
+from cc_cover.gui.commands import (
     NOT_INSTALLED_STATUS_LABEL,
     command_environment,
     device_probe_commands,
@@ -53,7 +53,7 @@ from cc_cover.commands import (
     terminate_process_tree,
     transcribe_command,
 )
-from cc_cover.data_root import (
+from cc_cover.gui.data_root import (
     RuntimePaths,
     apply_data_root,
     default_data_root,
@@ -61,8 +61,8 @@ from cc_cover.data_root import (
     resolve_data_root,
     runtime_paths,
 )
-from cc_cover.human_readable import format_duration, format_size, strip_ansi_escapes
-from cc_cover.progress import (
+from cc_cover.gui.human_readable import format_duration, format_size, strip_ansi_escapes
+from cc_cover.gui.progress import (
     FailureInfo,
     InstallProgressTracker,
     ProgressTracker,
@@ -78,7 +78,7 @@ from cc_cover.progress import (
     run_is_resumable,
     stopped_message,
 )
-from cc_cover.settings import (
+from cc_cover.gui.settings import (
     GUI_DEVICE_CHOICES,
     GuiSettings,
     SettingsError,
@@ -86,7 +86,7 @@ from cc_cover.settings import (
     resolve_default_device,
     save_gui_settings,
 )
-from cc_cover.storage import (
+from cc_cover.gui.storage import (
     CLEANUP_WARNING_BYTES,
     clean_model_cache,
     clear_all_data_text,
@@ -102,8 +102,8 @@ from cc_cover.storage import (
     model_cache_cleanup_text,
     runs_total_size,
 )
-from cc_cover.win_native import SingleInstanceLock, focus_existing_window
-from cc_cover.pipeline import (
+from cc_cover.gui.win_native import SingleInstanceLock, focus_existing_window
+from cc_cover.core.pipeline import (
     SUMMARY_FILENAME,
     CompletionStats,
     PipelineError,
@@ -218,9 +218,7 @@ CLI 仍支持 --device auto/cuda/cpu。
 
 
 class CCCoverApp(ttk.Frame):
-    def __init__(
-        self, master: tk.Tk, paths: RuntimePaths, lock: SingleInstanceLock
-    ):
+    def __init__(self, master: tk.Tk, paths: RuntimePaths, lock: SingleInstanceLock):
         super().__init__(master, padding=0)
         self.master = master
         self.paths = paths
@@ -241,9 +239,7 @@ class CCCoverApp(ttk.Frame):
         settings = self._load_settings()
         self._saved_device = settings.device
         self.scan_path = tk.StringVar(value=settings.scan_path)
-        self.device = tk.StringVar(
-            value=resolve_default_device(settings.device, None)
-        )
+        self.device = tk.StringVar(value=resolve_default_device(settings.device, None))
         self.device_auto = settings.device not in GUI_DEVICE_CHOICES
         self.ffmpeg = tk.StringVar(value=settings.ffmpeg)
         self.hash_videos = tk.BooleanVar(value=settings.hash_videos)
@@ -337,9 +333,7 @@ class CCCoverApp(ttk.Frame):
         )
         style.configure("Action.TButton", padding=(12, 7))
         style.configure("Treeview", rowheight=28, font=("Microsoft YaHei UI", 9))
-        style.configure(
-            "Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold")
-        )
+        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold"))
 
     def _build_interface(self) -> None:
         header = ttk.Frame(self, style="App.TFrame", padding=(28, 22, 28, 12))
@@ -375,7 +369,9 @@ class CCCoverApp(ttk.Frame):
         self._build_text_tab(self.guide_tab, GUIDE_TEXT)
         self._build_log_tab()
 
-    def _panel(self, parent: ttk.Frame, padding: tuple[int, int] = (18, 14)) -> ttk.Frame:
+    def _panel(
+        self, parent: ttk.Frame, padding: tuple[int, int] = (18, 14)
+    ) -> ttk.Frame:
         panel = ttk.Frame(parent, style="Panel.TFrame", padding=padding)
         panel.pack(fill="x", pady=(0, 10))
         return panel
@@ -383,9 +379,9 @@ class CCCoverApp(ttk.Frame):
     def _build_work_tab(self) -> None:
         environment_panel = self._panel(self.work_tab)
         environment_panel.columnconfigure(1, weight=1)
-        ttk.Label(
-            environment_panel, text="运行环境", style="Section.TLabel"
-        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(environment_panel, text="运行环境", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
         self.environment_label = ttk.Label(
             environment_panel,
             textvariable=self.environment_status,
@@ -394,9 +390,7 @@ class CCCoverApp(ttk.Frame):
         self.environment_label.grid(row=0, column=1, sticky="w", padx=(14, 0))
         device_box = ttk.Frame(environment_panel, style="Panel.TFrame")
         device_box.grid(row=0, column=2, padx=(12, 8))
-        ttk.Label(
-            device_box, text="运行设备：", style="Body.TLabel"
-        ).pack(side="left")
+        ttk.Label(device_box, text="运行设备：", style="Body.TLabel").pack(side="left")
         self.device_gpu_radio = ttk.Radiobutton(
             device_box,
             text="NVIDIA GPU",
@@ -419,9 +413,9 @@ class CCCoverApp(ttk.Frame):
         )
         self.setup_button.grid(row=0, column=3, sticky="e")
         self.data_root_path = tk.StringVar(value=str(self.paths.data_root))
-        ttk.Label(
-            environment_panel, text="数据目录：", style="Body.TLabel"
-        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(environment_panel, text="数据目录：", style="Body.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(8, 0)
+        )
         ttk.Label(
             environment_panel,
             textvariable=self.data_root_path,
@@ -435,9 +429,9 @@ class CCCoverApp(ttk.Frame):
             command=self.change_data_root,
         )
         self.data_root_button.grid(row=1, column=3, sticky="e", pady=(8, 0))
-        ttk.Label(
-            environment_panel, text="模型缓存：", style="Body.TLabel"
-        ).grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(environment_panel, text="模型缓存：", style="Body.TLabel").grid(
+            row=2, column=0, sticky="w", pady=(8, 0)
+        )
         ttk.Label(
             environment_panel,
             textvariable=self.cache_size_var,
@@ -462,9 +456,7 @@ class CCCoverApp(ttk.Frame):
             text="清理全部本地数据",
             command=self.clear_all_data,
         )
-        self.clear_all_data_button.grid(
-            row=3, column=3, sticky="e", pady=(8, 0)
-        )
+        self.clear_all_data_button.grid(row=3, column=3, sticky="e", pady=(8, 0))
         ttk.Label(
             environment_panel, text="HF Token（可选）：", style="Body.TLabel"
         ).grid(row=4, column=0, sticky="w", pady=(8, 0))
@@ -510,13 +502,11 @@ class CCCoverApp(ttk.Frame):
 
         ffmpeg_row = ttk.Frame(options_panel, style="Panel.TFrame")
         ffmpeg_row.pack(fill="x", pady=(10, 0))
-        ttk.Label(
-            ffmpeg_row, text="FFmpeg（通常留空）：", style="Body.TLabel"
-        ).pack(side="left")
-        self.ffmpeg_entry = ttk.Entry(ffmpeg_row, textvariable=self.ffmpeg)
-        self.ffmpeg_entry.pack(
-            side="left", fill="x", expand=True, padx=(8, 8)
+        ttk.Label(ffmpeg_row, text="FFmpeg（通常留空）：", style="Body.TLabel").pack(
+            side="left"
         )
+        self.ffmpeg_entry = ttk.Entry(ffmpeg_row, textvariable=self.ffmpeg)
+        self.ffmpeg_entry.pack(side="left", fill="x", expand=True, padx=(8, 8))
         self.ffmpeg_button = ttk.Button(
             ffmpeg_row,
             text="选择文件",
@@ -535,9 +525,9 @@ class CCCoverApp(ttk.Frame):
         )
         selection_row = ttk.Frame(candidate_panel, style="Panel.TFrame")
         selection_row.grid(row=1, column=0, sticky="ew", pady=(4, 8))
-        ttk.Label(
-            selection_row, textvariable=self.summary, style="Body.TLabel"
-        ).pack(side="left")
+        ttk.Label(selection_row, textvariable=self.summary, style="Body.TLabel").pack(
+            side="left"
+        )
         self.select_all_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             selection_row,
@@ -624,9 +614,9 @@ class CCCoverApp(ttk.Frame):
             state="disabled",
         )
         self.cancel_button.pack(side="left", padx=(8, 0))
-        ttk.Label(
-            action_panel, textvariable=self.status, style="Subtitle.TLabel"
-        ).pack(side="right")
+        ttk.Label(action_panel, textvariable=self.status, style="Subtitle.TLabel").pack(
+            side="right"
+        )
         progress_row = ttk.Frame(self.work_tab, style="App.TFrame")
         progress_row.pack(fill="x", pady=(0, 2), before=candidate_panel)
         self.progress = ttk.Progressbar(progress_row, mode="indeterminate", length=260)
@@ -718,9 +708,7 @@ class CCCoverApp(ttk.Frame):
         try:
             save_gui_settings(self.paths.data_root, self._current_settings())
         except (OSError, SettingsError) as exc:
-            messagebox.showwarning(
-                "无法保存设置", str(exc), parent=self.master
-            )
+            messagebox.showwarning("无法保存设置", str(exc), parent=self.master)
 
     def _flush_settings(self) -> None:
         if self._save_after_id is not None:
@@ -796,9 +784,7 @@ class CCCoverApp(ttk.Frame):
         threading.Thread(target=worker, daemon=True).start()
 
     def _process_environment(self) -> dict[str, str]:
-        return command_environment(
-            self.paths, hf_token=self.hf_token.get().strip()
-        )
+        return command_environment(self.paths, hf_token=self.hf_token.get().strip())
 
     def _run_capture(self, command: list[str]) -> str:
         if self.cancel_requested:
@@ -841,9 +827,7 @@ class CCCoverApp(ttk.Frame):
             self.events.put(("log", line))
         return self._finish_process(process, "".join(lines))
 
-    def _finish_process(
-        self, process: subprocess.Popen[str], output: str
-    ) -> str:
+    def _finish_process(self, process: subprocess.Popen[str], output: str) -> str:
         return_code = process.wait()
         self.process = None
         if self.stop_triggered:
@@ -910,10 +894,7 @@ class CCCoverApp(ttk.Frame):
         )
         if not selected:
             return
-        if (
-            Path(selected).expanduser().resolve()
-            == self.paths.data_root.resolve()
-        ):
+        if Path(selected).expanduser().resolve() == self.paths.data_root.resolve():
             return
         new_lock = SingleInstanceLock(Path(selected))
         try:
@@ -926,9 +907,7 @@ class CCCoverApp(ttk.Frame):
                 )
                 return
         except OSError as exc:
-            messagebox.showerror(
-                "无法创建单实例锁", str(exc), parent=self.master
-            )
+            messagebox.showerror("无法创建单实例锁", str(exc), parent=self.master)
             return
         try:
             new_root = apply_data_root(
@@ -1013,9 +992,7 @@ class CCCoverApp(ttk.Frame):
                 # 避免 device_detected 事件恰好在两次读取之间被主线程处理、
                 # 导致这里选错提示文案（不受 _set_busy 的按钮禁用保护）。
                 detail = str(exc).strip() or "需要安装或修复"
-                label = (
-                    "GPU 环境未就绪" if device == "cuda" else "需要安装或修复"
-                )
+                label = "GPU 环境未就绪" if device == "cuda" else "需要安装或修复"
                 self.events.put(("environment", (False, label)))
                 self.events.put(("log", f"环境检查失败：{detail}\n"))
                 self._detect_and_report()

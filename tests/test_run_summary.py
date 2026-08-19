@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cc_cover.discovery import discover
-from cc_cover.models import PipelineOptions, Segment
-from cc_cover.pipeline import (
+from cc_cover.core.discovery import discover
+from cc_cover.core.models import PipelineOptions, Segment
+from cc_cover.core.pipeline import (
     PipelineError,
     SubtitlePipeline,
     build_summary_text,

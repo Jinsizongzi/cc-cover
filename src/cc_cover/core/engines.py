@@ -13,7 +13,7 @@ import wave
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from cc_cover.models import Phase, PipelineOptions, Segment
+from cc_cover.core.models import Phase, PipelineOptions, Segment
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,9 @@ def configure_model_cache(model_cache: Path, *, phase: Phase) -> None:
             path.mkdir(parents=True, exist_ok=True)
             os.environ[name] = str(path)
     except OSError as exc:
-        raise EngineError(f"模型缓存目录不可写：{model_cache}: {exc}", phase=phase) from exc
+        raise EngineError(
+            f"模型缓存目录不可写：{model_cache}: {exc}", phase=phase
+        ) from exc
     tempfile.tempdir = str(runtime_temp)
 
 
@@ -112,7 +114,11 @@ def resolve_device(requested: str, compute_type: str) -> tuple[str, str]:
         raise EngineError(
             "请求了 CUDA，但当前环境没有可用的 CUDA ASR 运行时", phase=Phase.SETUP
         )
-    device = "cuda" if requested == "cuda" or requested == "auto" and cuda_available else "cpu"
+    device = (
+        "cuda"
+        if requested == "cuda" or requested == "auto" and cuda_available
+        else "cpu"
+    )
     if compute_type == "auto":
         compute_type = "int8_float16" if device == "cuda" else "int8"
     return device, compute_type
@@ -377,7 +383,9 @@ class FunASREngine:
                 max_single_segment_time=30000,
             )
         except Exception as exc:
-            raise EngineError(f"FunASR 模型加载失败：{exc}", phase=Phase.FUNASR) from exc
+            raise EngineError(
+                f"FunASR 模型加载失败：{exc}", phase=Phase.FUNASR
+            ) from exc
 
     def transcribe(
         self, audio_path: Path, duration_seconds: float, hotwords: Sequence[str]

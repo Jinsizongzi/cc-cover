@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from cc_cover.candidates import (
+from cc_cover.gui.candidate_list import (
     confirmation_text,
     estimate_processing_seconds,
     format_column_duration,

@@ -7,8 +7,8 @@ import time
 import unittest
 from pathlib import Path
 
-from cc_cover.cli import create_parser
-from cc_cover.commands import (
+from cc_cover.core.cli import create_parser
+from cc_cover.gui.commands import (
     ASR_DEPENDENCIES,
     NOT_INSTALLED_STATUS_LABEL,
     TORCH_VERSION,
@@ -30,8 +30,8 @@ from cc_cover.commands import (
     terminate_process_tree,
     transcribe_command,
 )
-from cc_cover.data_root import runtime_paths
-from cc_cover.settings import GuiSettings
+from cc_cover.gui.data_root import runtime_paths
+from cc_cover.gui.settings import GuiSettings
 
 
 class CommandConstructionTests(unittest.TestCase):
@@ -259,9 +259,7 @@ class DeviceDetectionTests(unittest.TestCase):
         self.assertIn("--format=csv,noheader", command[1:])
 
     def test_parsed_nvidia_probe_maps_gpu_names_to_cuda(self) -> None:
-        self.assertEqual(
-            parsed_nvidia_probe("NVIDIA GeForce RTX 4090\n"), "cuda"
-        )
+        self.assertEqual(parsed_nvidia_probe("NVIDIA GeForce RTX 4090\n"), "cuda")
         self.assertEqual(parsed_nvidia_probe("  NVIDIA RTX A6000  \n"), "cuda")
 
     def test_parsed_nvidia_probe_rejects_empty_output(self) -> None:
@@ -420,9 +418,7 @@ class VersionConsistencyTests(unittest.TestCase):
             )
             paths.venv_python.parent.mkdir(parents=True, exist_ok=True)
             paths.venv_python.write_text("")
-            commands = setup_commands(
-                paths, ["python"], "cpu", outdated={"funasr"}
-            )
+            commands = setup_commands(paths, ["python"], "cpu", outdated={"funasr"})
 
         self.assertEqual(len(commands), 2)
         self.assertNotIn("uninstall", [part for cmd in commands for part in cmd])

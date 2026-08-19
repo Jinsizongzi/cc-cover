@@ -5,7 +5,7 @@ import unittest
 import wave
 from pathlib import Path
 
-from cc_cover.discovery import VIDEO_EXTENSIONS, discover
+from cc_cover.core.discovery import VIDEO_EXTENSIONS, discover
 
 
 class VideoExtensionTests(unittest.TestCase):

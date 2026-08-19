@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cc_cover.models import (
+from cc_cover.core.models import (
     DoneEvent,
     EngineStartEvent,
     ErrorEvent,
@@ -13,7 +13,7 @@ from cc_cover.models import (
     ProgressEvent,
     RunDirEvent,
 )
-from cc_cover.progress import (
+from cc_cover.gui.progress import (
     FailureInfo,
     InstallProgressSnapshot,
     InstallProgressTracker,
@@ -138,9 +138,7 @@ class FirstFailedSampleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary) / "run"
             run_dir.mkdir()
-            (run_dir / "stage_report.json").write_text(
-                "not json", encoding="utf-8"
-            )
+            (run_dir / "stage_report.json").write_text("not json", encoding="utf-8")
             self.assertIsNone(first_failed_sample(run_dir))
 
 
@@ -154,14 +152,10 @@ class ResumeabilityTests(unittest.TestCase):
             self.assertFalse(run_is_resumable(run_dir))
 
             manifest = run_dir / "manifest.json"
-            manifest.write_text(
-                json.dumps({"status": "running"}), encoding="utf-8"
-            )
+            manifest.write_text(json.dumps({"status": "running"}), encoding="utf-8")
             self.assertTrue(run_is_resumable(run_dir))
 
-            manifest.write_text(
-                json.dumps({"status": "committed"}), encoding="utf-8"
-            )
+            manifest.write_text(json.dumps({"status": "committed"}), encoding="utf-8")
             self.assertFalse(run_is_resumable(run_dir))
 
             manifest.write_text("broken", encoding="utf-8")
@@ -221,9 +215,7 @@ class DoneEventPresentTests(unittest.TestCase):
         self.assertTrue(done_event_present(output))
 
     def test_false_without_done_event(self) -> None:
-        output = json.dumps(
-            ErrorEvent(phase=Phase.FUNASR, reason="失败").to_dict()
-        )
+        output = json.dumps(ErrorEvent(phase=Phase.FUNASR, reason="失败").to_dict())
 
         self.assertFalse(done_event_present(output))
         self.assertFalse(done_event_present(""))
@@ -332,9 +324,7 @@ class FailureInfoFromRunTests(unittest.TestCase):
     def test_explicit_run_dir_wins_over_captured_run_dir_event(self) -> None:
         chunks = [
             json.dumps(RunDirEvent(path="C:\\runs\\a").to_dict()) + "\n",
-            json.dumps(
-                ErrorEvent(phase=Phase.WRITEBACK, reason="写回失败").to_dict()
-            )
+            json.dumps(ErrorEvent(phase=Phase.WRITEBACK, reason="写回失败").to_dict())
             + "\n",
         ]
 
@@ -399,7 +389,9 @@ class StoppedMessageTests(unittest.TestCase):
 
             message = stopped_message(info)
 
-        self.assertEqual(message, "任务已停止，产物已暂存，可点击「继续中断任务」恢复。")
+        self.assertEqual(
+            message, "任务已停止，产物已暂存，可点击「继续中断任务」恢复。"
+        )
 
     def test_scan_stop_mentions_no_partial_results(self) -> None:
         info = FailureInfo(stage="扫描", reason="用户停止")
@@ -420,7 +412,9 @@ class StoppedMessageTests(unittest.TestCase):
 
 class ParseEventLineTests(unittest.TestCase):
     def test_decodes_engine_start_event(self) -> None:
-        line = json.dumps({"event": "engine_start", "engine": "funasr", "device": "cuda"})
+        line = json.dumps(
+            {"event": "engine_start", "engine": "funasr", "device": "cuda"}
+        )
 
         self.assertEqual(
             parse_event_line(line), EngineStartEvent(engine="funasr", device="cuda")
@@ -439,7 +433,9 @@ class ParseEventLineTests(unittest.TestCase):
 
         self.assertEqual(
             parse_event_line(line),
-            ProgressEvent(engine="faster_whisper", index=2, total=5, video_path="a.mp4"),
+            ProgressEvent(
+                engine="faster_whisper", index=2, total=5, video_path="a.mp4"
+            ),
         )
 
     def test_decodes_run_dir_event(self) -> None:
@@ -474,7 +470,9 @@ class ParseEventLineTests(unittest.TestCase):
         )
 
     def test_decodes_error_event_without_optional_fields(self) -> None:
-        line = json.dumps({"event": "error", "phase": "setup", "reason": "找不到 FFmpeg"})
+        line = json.dumps(
+            {"event": "error", "phase": "setup", "reason": "找不到 FFmpeg"}
+        )
 
         self.assertEqual(
             parse_event_line(line),
@@ -652,9 +650,7 @@ class InstallProgressTrackerTests(unittest.TestCase):
         tracker = InstallProgressTracker(total_bytes=1024**3, component_count=4)
         tracker.on_output("Downloading a.whl (100.0 MB)\nDownloading b.whl (50.0 MB)\n")
 
-        self.assertEqual(
-            tracker.snapshot(now=5.0).downloaded_bytes, 150 * 1024**2
-        )
+        self.assertEqual(tracker.snapshot(now=5.0).downloaded_bytes, 150 * 1024**2)
 
     def test_ignores_non_download_lines(self) -> None:
         tracker = InstallProgressTracker(total_bytes=1024**3, component_count=4)

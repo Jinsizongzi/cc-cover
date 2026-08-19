@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from cc_cover.background import (
+from cc_cover.gui.background import (
     CancelledOutcome,
     DoneOutcome,
     ErrorOutcome,
@@ -11,7 +11,7 @@ from cc_cover.background import (
     TaskCancelled,
     run_in_background,
 )
-from cc_cover.progress import FailureInfo
+from cc_cover.gui.progress import FailureInfo
 
 
 class RunInBackgroundTests(unittest.TestCase):

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from cc_cover.data_root import RuntimePaths
-from cc_cover.human_readable import format_size
+from cc_cover.gui.data_root import RuntimePaths
+from cc_cover.gui.human_readable import format_size
 
 CLEANUP_WARNING_BYTES = 5 * 1024**3
 

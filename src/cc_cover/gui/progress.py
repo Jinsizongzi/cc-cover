@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from cc_cover.human_readable import format_duration, format_size
-from cc_cover.models import (
+from cc_cover.gui.human_readable import format_duration, format_size
+from cc_cover.core.models import (
     DoneEvent,
     ErrorEvent,
     Event,
@@ -294,9 +294,7 @@ class ProgressTracker:
     def _completed_count(self) -> int:
         required = set(self._ENGINES)
         return sum(
-            1
-            for engines in self._engines_by_path.values()
-            if required <= engines
+            1 for engines in self._engines_by_path.values() if required <= engines
         )
 
     def _steps_touched(self) -> int:
@@ -403,9 +401,7 @@ class InstallProgressTracker:
                 match.group("size"), match.group("unit")
             )
         for match in _BAR_FRAME_PATTERN.finditer(chunk):
-            current = _bytes_from_quantity(
-                match.group("current"), match.group("unit")
-            )
+            current = _bytes_from_quantity(match.group("current"), match.group("unit"))
             if current > self._bar_bytes:
                 self._bar_bytes = current
 
@@ -421,9 +417,7 @@ class InstallProgressTracker:
         # 安装收尾阶段因下载量提前到 100% 造成误导；下载细节由文案展示。
         completed = max(0, self.component_index - 1)
         percent = (
-            round(completed / self.component_count * 100)
-            if self.component_count
-            else 0
+            round(completed / self.component_count * 100) if self.component_count else 0
         )
         speed: float | None = None
         remaining: float | None = None
@@ -444,9 +438,7 @@ class InstallProgressTracker:
 
 def install_progress_text(snapshot: InstallProgressSnapshot) -> str:
     """安装进度显示文本：组件 N/M · 已下载约 X · 约剩余。"""
-    parts = [
-        f"组件 {snapshot.component_index}/{snapshot.component_count}"
-    ]
+    parts = [f"组件 {snapshot.component_index}/{snapshot.component_count}"]
     if snapshot.downloaded_bytes > 0:
         parts.append(f"已下载约 {format_size(snapshot.downloaded_bytes)}")
     if snapshot.remaining_seconds is not None:

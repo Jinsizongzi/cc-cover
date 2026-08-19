@@ -24,9 +24,7 @@ def scan_confirmation_stats(report: Mapping[str, Any]) -> tuple[int, int]:
 
 def confirmation_text(candidate_count: int, excluded_count: int) -> str:
     """开始前确认框的文案：将处理 N 个视频并替换同名 TXT，含已排除数量。"""
-    lines = [
-        f"将处理 {candidate_count} 个视频并替换同名 TXT（替换前自动备份）。"
-    ]
+    lines = [f"将处理 {candidate_count} 个视频并替换同名 TXT（替换前自动备份）。"]
     if excluded_count:
         lines.append(f"已排除 {excluded_count} 个视频，本次不处理。")
     else:

@@ -23,8 +23,8 @@ except Exception:
 import tkinter as tk
 from PIL import ImageGrab
 
-from cc_cover.data_root import ensure_data_root, runtime_paths
-from cc_cover.win_native import SingleInstanceLock
+from cc_cover.gui.data_root import ensure_data_root, runtime_paths
+from cc_cover.gui.win_native import SingleInstanceLock
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = Path(__file__).resolve().parent
@@ -111,7 +111,7 @@ def main() -> int:
     root.geometry(f"1080x760+{x}+{y}")
     root.deiconify()
 
-    from cc_cover.gui import CCCoverApp
+    from cc_cover.gui.app import CCCoverApp
 
     app = CCCoverApp(root, paths, lock)
     _pump(root, 2.0)  # 等待环境检查与缓存显示刷新

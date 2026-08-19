@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from cc_cover.formats import (
+from cc_cover.core.formats import (
     FormatError,
     decode_bytes,
     normalize_text,
@@ -12,7 +12,7 @@ from cc_cover.formats import (
     timestamp,
     validate_rendered,
 )
-from cc_cover.models import Segment
+from cc_cover.core.models import Segment
 
 
 class TimestampTests(unittest.TestCase):
@@ -74,9 +74,7 @@ class RenderSegmentsTests(unittest.TestCase):
 
 class ValidateRenderedTests(unittest.TestCase):
     def test_accepts_fixed_timed_payload_with_metrics(self) -> None:
-        payload = "00:00\r\n你好世界\r\n\r\n00:02\r\nPyTorch 2.5\r\n".encode(
-            "utf-8"
-        )
+        payload = "00:00\r\n你好世界\r\n\r\n00:02\r\nPyTorch 2.5\r\n".encode("utf-8")
 
         metrics = validate_rendered(payload)
 
@@ -86,8 +84,8 @@ class ValidateRenderedTests(unittest.TestCase):
         self.assertEqual(metrics["last_timestamp"], "00:02")
 
     def test_accepts_hmmss_with_unlimited_hours(self) -> None:
-        payload = (
-            "1:40:00\r\n长视频内容\r\n\r\n25:00:00\r\n跨天内容\r\n".encode("utf-8")
+        payload = "1:40:00\r\n长视频内容\r\n\r\n25:00:00\r\n跨天内容\r\n".encode(
+            "utf-8"
         )
 
         metrics = validate_rendered(payload)
@@ -159,9 +157,7 @@ class DecodeBytesTests(unittest.TestCase):
         self.assertEqual((text, encoding, bom), ("你好", "utf-8", False))
 
     def test_utf8_bom_is_stripped_and_flagged(self) -> None:
-        text, encoding, bom = decode_bytes(
-            b"\xef\xbb\xbf" + "你好".encode("utf-8")
-        )
+        text, encoding, bom = decode_bytes(b"\xef\xbb\xbf" + "你好".encode("utf-8"))
 
         self.assertEqual((text, encoding, bom), ("你好", "utf-8", True))
 

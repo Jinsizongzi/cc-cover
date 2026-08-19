@@ -25,9 +25,7 @@ class SingleInstanceLock:
 
     def _identity(self) -> str:
         """返回数据根的规范化标识，用于生成跨进程一致的锁名。"""
-        normalized = (
-            os.path.normcase(str(self.data_root)).replace("\\", "/").lower()
-        )
+        normalized = os.path.normcase(str(self.data_root)).replace("\\", "/").lower()
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
 
     def _mutex_name(self) -> str:
@@ -101,14 +99,9 @@ class SingleInstanceLock:
         lock_path = self.data_root / _LOCK_FILENAME
         for attempt in range(2):
             try:
-                descriptor = os.open(
-                    lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
-                )
+                descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
-                if (
-                    attempt == 0
-                    and not self._pid_alive(self._read_pid(lock_path))
-                ):
+                if attempt == 0 and not self._pid_alive(self._read_pid(lock_path)):
                     try:
                         lock_path.unlink()
                     except OSError:
@@ -170,9 +163,7 @@ def focus_existing_window(prefix: str = "CC-Cover") -> bool:
         from ctypes import wintypes
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
-        enum_proc = ctypes.WINFUNCTYPE(
-            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
-        )
+        enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         user32.EnumWindows.argtypes = (enum_proc, wintypes.LPARAM)
         user32.EnumWindows.restype = wintypes.BOOL
         user32.GetWindowTextLengthW.argtypes = (wintypes.HWND,)

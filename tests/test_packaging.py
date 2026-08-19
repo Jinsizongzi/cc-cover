@@ -6,17 +6,15 @@ import struct
 import unittest
 from pathlib import Path
 
-from cc_cover import data_root
-from cc_cover import settings
+from cc_cover.gui import data_root
+from cc_cover.gui import settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_build_version_info():
     path = PROJECT_ROOT / "packaging" / "build_version_info.py"
-    spec = importlib.util.spec_from_file_location(
-        "build_version_info", path
-    )
+    spec = importlib.util.spec_from_file_location("build_version_info", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -28,9 +26,9 @@ class PackagingTests(unittest.TestCase):
         """version_info.txt 与 __init__.py 的 __version__ 保持一致（单一来源）。"""
         module = _load_build_version_info()
         expected = module.version_info_text(module.current_version())
-        actual = (
-            PROJECT_ROOT / "packaging" / "version_info.txt"
-        ).read_text(encoding="utf-8")
+        actual = (PROJECT_ROOT / "packaging" / "version_info.txt").read_text(
+            encoding="utf-8"
+        )
         self.assertEqual(actual, expected)
 
     def test_version_resource_has_four_part_file_version(self) -> None:
@@ -44,9 +42,7 @@ class PackagingTests(unittest.TestCase):
 
     def test_iss_default_version_matches_source_version(self) -> None:
         """CC-Cover.iss 的默认版本号与 __init__.py 一致，避免手工漂移。"""
-        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(
-            encoding="utf-8"
-        )
+        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(encoding="utf-8")
         match = re.search(r'#define MyAppVersion "([^"]+)"', iss)
         self.assertIsNotNone(match, "CC-Cover.iss 缺少默认 MyAppVersion")
         assert match is not None
@@ -54,21 +50,15 @@ class PackagingTests(unittest.TestCase):
 
     def test_iss_installs_per_user_to_localappdata(self) -> None:
         """安装器默认当前用户安装到 %LOCALAPPDATA%\\Programs\\CC-Cover。"""
-        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn(
-            "DefaultDirName={localappdata}\\Programs\\{#MyAppName}", iss
-        )
+        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(encoding="utf-8")
+        self.assertIn("DefaultDirName={localappdata}\\Programs\\{#MyAppName}", iss)
         self.assertIn("PrivilegesRequired=lowest", iss)
         self.assertNotIn("PrivilegesRequired=admin", iss)
 
     def test_iss_packages_onedir_and_cleans_data_root_on_uninstall(self) -> None:
         """安装器打包 onedir 产物；卸载时清理数据根（与运行时布局单一来源一致）。"""
-        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("Source: \"..\\dist\\CC-Cover\\*\"", iss)
+        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(encoding="utf-8")
+        self.assertIn('Source: "..\\dist\\CC-Cover\\*"', iss)
         self.assertIn("recursesubdirs", iss)
         data_root_items = set(data_root.DATA_ROOT_SUBDIRECTORIES) | {
             settings.SETTINGS_FILENAME
@@ -79,17 +69,13 @@ class PackagingTests(unittest.TestCase):
 
     def test_iss_uses_vendored_chinese_language_file(self) -> None:
         """中文语言文件随仓库自带，构建不依赖 Inno 安装是否带全语言包。"""
-        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(
-            encoding="utf-8"
-        )
+        iss = (PROJECT_ROOT / "packaging" / "CC-Cover.iss").read_text(encoding="utf-8")
         self.assertIn(
             'Name: "chinesesimplified"; MessagesFile: '
             '"Languages\\ChineseSimplified.isl"',
             iss,
         )
-        isl = (
-            PROJECT_ROOT / "packaging" / "Languages" / "ChineseSimplified.isl"
-        )
+        isl = PROJECT_ROOT / "packaging" / "Languages" / "ChineseSimplified.isl"
         self.assertTrue(isl.is_file(), "ChineseSimplified.isl 缺失")
         self.assertGreater(isl.stat().st_size, 1000)
 

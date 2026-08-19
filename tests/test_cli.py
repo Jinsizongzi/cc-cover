@@ -9,9 +9,9 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-from cc_cover.cli import ConfigError, create_parser, load_exclusions, main
-from cc_cover.models import Phase
-from cc_cover.pipeline import PipelineError
+from cc_cover.core.cli import ConfigError, create_parser, load_exclusions, main
+from cc_cover.core.models import Phase
+from cc_cover.core.pipeline import PipelineError
 
 
 class CliTests(unittest.TestCase):
@@ -64,9 +64,7 @@ class CliTests(unittest.TestCase):
             )
             output = StringIO()
             with redirect_stdout(output):
-                result = main(
-                    ["scan", str(videos), "--config", str(config), "--json"]
-                )
+                result = main(["scan", str(videos), "--config", str(config), "--json"])
 
         payload = json.loads(output.getvalue())
         self.assertEqual(result, 0)
@@ -92,9 +90,7 @@ class CliTests(unittest.TestCase):
         self.assertTrue(
             payload["candidates"][0]["target_path"].endswith("standalone.txt")
         )
-        self.assertTrue(
-            payload["conflicts"][0]["target_path"].endswith("episode.txt")
-        )
+        self.assertTrue(payload["conflicts"][0]["target_path"].endswith("episode.txt"))
         self.assertEqual(len(payload["conflicts"][0]["videos"]), 2)
 
     def test_obsolete_scan_options_are_rejected(self) -> None:
@@ -119,9 +115,7 @@ class CliTests(unittest.TestCase):
     def test_cli_device_choices_are_preserved(self) -> None:
         parser = create_parser()
         for choice in ("auto", "cuda", "cpu"):
-            arguments = parser.parse_args(
-                ["transcribe", "root", "--device", choice]
-            )
+            arguments = parser.parse_args(["transcribe", "root", "--device", choice])
             self.assertEqual(arguments.device, choice)
 
     def test_load_exclusions_accepts_valid_video_path_list(self) -> None:
@@ -192,7 +186,7 @@ class CliTests(unittest.TestCase):
             pipeline.run_dir = root / "runs" / "run-1"
             pipeline.candidate_failures = {}
             with mock.patch(
-                "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
+                "cc_cover.core.cli.SubtitlePipeline.create", return_value=pipeline
             ) as create:
                 with redirect_stdout(output):
                     result = main(
@@ -235,7 +229,7 @@ class CliTests(unittest.TestCase):
                 json.dumps([str((root / "only.mp4").resolve())]), encoding="utf-8"
             )
             output = StringIO()
-            with mock.patch("cc_cover.cli.SubtitlePipeline.create") as create:
+            with mock.patch("cc_cover.core.cli.SubtitlePipeline.create") as create:
                 with redirect_stdout(output):
                     result = main(
                         [
@@ -264,7 +258,7 @@ class CliTests(unittest.TestCase):
             pipeline.run_dir = root / "runs" / "run-1"
             pipeline.candidate_failures = {}
             with mock.patch(
-                "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
+                "cc_cover.core.cli.SubtitlePipeline.create", return_value=pipeline
             ):
                 with redirect_stdout(output):
                     result = main(
@@ -306,7 +300,7 @@ class CliTests(unittest.TestCase):
                 "CC-1": {"video_path": "bad.mp4", "reason": "音频提取失败"}
             }
             with mock.patch(
-                "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
+                "cc_cover.core.cli.SubtitlePipeline.create", return_value=pipeline
             ):
                 with redirect_stdout(output), redirect_stderr(errors):
                     result = main(
@@ -339,7 +333,7 @@ class CliTests(unittest.TestCase):
         pipeline.verify.return_value = {"verified_count": 3}
         pipeline.candidate_failures = {}
         with mock.patch(
-            "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
+            "cc_cover.core.cli.SubtitlePipeline.resume", return_value=pipeline
         ):
             with redirect_stdout(output):
                 result = main(["resume", str(pipeline.run_dir)])
@@ -349,9 +343,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("复核通过，共 3 个字幕文件。", lines)
         pipeline.execute.assert_not_called()
         events = [json.loads(line) for line in lines if line.startswith("{")]
-        self.assertEqual(
-            events, [{"event": "done", "run_dir": str(pipeline.run_dir)}]
-        )
+        self.assertEqual(events, [{"event": "done", "run_dir": str(pipeline.run_dir)}])
 
     def test_resume_pending_executes_and_emits_done_event(self) -> None:
         output = StringIO()
@@ -360,7 +352,7 @@ class CliTests(unittest.TestCase):
         pipeline.manifest = {"status": "staged_partial"}
         pipeline.candidate_failures = {}
         with mock.patch(
-            "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
+            "cc_cover.core.cli.SubtitlePipeline.resume", return_value=pipeline
         ):
             with redirect_stdout(output):
                 result = main(["resume", str(pipeline.run_dir)])
@@ -370,9 +362,7 @@ class CliTests(unittest.TestCase):
         self.assertIn(f"字幕已写回并复核通过：{pipeline.run_dir}", lines)
         pipeline.execute.assert_called_once_with()
         events = [json.loads(line) for line in lines if line.startswith("{")]
-        self.assertEqual(
-            events, [{"event": "done", "run_dir": str(pipeline.run_dir)}]
-        )
+        self.assertEqual(events, [{"event": "done", "run_dir": str(pipeline.run_dir)}])
 
     def test_verify_emits_done_event(self) -> None:
         output = StringIO()
@@ -381,7 +371,7 @@ class CliTests(unittest.TestCase):
         pipeline.verify.return_value = {"verified_count": 5}
         pipeline.candidate_failures = {}
         with mock.patch(
-            "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
+            "cc_cover.core.cli.SubtitlePipeline.resume", return_value=pipeline
         ):
             with redirect_stdout(output):
                 result = main(["verify", str(pipeline.run_dir)])
@@ -390,9 +380,7 @@ class CliTests(unittest.TestCase):
         lines = output.getvalue().splitlines()
         self.assertIn("复核通过，共 5 个字幕文件。", lines)
         events = [json.loads(line) for line in lines if line.startswith("{")]
-        self.assertEqual(
-            events, [{"event": "done", "run_dir": str(pipeline.run_dir)}]
-        )
+        self.assertEqual(events, [{"event": "done", "run_dir": str(pipeline.run_dir)}])
 
     def test_pipeline_error_emits_error_event_with_phase_and_candidate_context(
         self,
@@ -411,7 +399,7 @@ class CliTests(unittest.TestCase):
             root = Path(temporary)
             self._write_candidates(root, ["only"])
             with mock.patch(
-                "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
+                "cc_cover.core.cli.SubtitlePipeline.create", return_value=pipeline
             ):
                 with redirect_stdout(output), redirect_stderr(errors):
                     result = main(

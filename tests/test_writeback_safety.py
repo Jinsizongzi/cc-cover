@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Callable
 from unittest import mock
 
-from cc_cover.discovery import discover
-from cc_cover.models import PipelineOptions
-from cc_cover.pipeline import (
+from cc_cover.core.discovery import discover
+from cc_cover.core.models import PipelineOptions
+from cc_cover.core.pipeline import (
     PipelineError,
     SubtitlePipeline,
     options_to_dict,
@@ -106,7 +106,7 @@ class CommitRollbackTests(unittest.TestCase):
             )
             target_a, target_b = targets
             with mock.patch(
-                "cc_cover.pipeline.write_bytes_atomic",
+                "cc_cover.core.pipeline.write_bytes_atomic",
                 side_effect=_fail_write_on(target_b),
             ):
                 with self.assertRaises(OSError) as caught:
@@ -127,7 +127,7 @@ class CommitRollbackTests(unittest.TestCase):
             target_a, target_b = targets
             self.assertFalse(target_a.exists())
             with mock.patch(
-                "cc_cover.pipeline.write_bytes_atomic",
+                "cc_cover.core.pipeline.write_bytes_atomic",
                 side_effect=_fail_write_on(target_b),
             ):
                 with self.assertRaises(OSError):
@@ -151,12 +151,8 @@ class CommitRollbackTests(unittest.TestCase):
             self.assertEqual(report["entry_count"], 1)
             self.assertEqual(target_a.read_bytes(), CAPTION)
             backup_dir = pipeline.run_dir / "backups" / candidates[0].sample_id
-            self.assertEqual(
-                (backup_dir / "original.txt").read_bytes(), b"original-a"
-            )
-            state = json.loads(
-                (backup_dir / "state.json").read_text(encoding="utf-8")
-            )
+            self.assertEqual((backup_dir / "original.txt").read_bytes(), b"original-a")
+            state = json.loads((backup_dir / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["initial_state"], "nonempty")
             self.assertEqual(state["target_path"], str(target_a.resolve()))
 
@@ -172,7 +168,7 @@ class CommitRollbackTests(unittest.TestCase):
             )
             target_a, target_b, target_c = targets
             with mock.patch(
-                "cc_cover.pipeline.write_bytes_atomic",
+                "cc_cover.core.pipeline.write_bytes_atomic",
                 side_effect=_fail_write_on(target_c),
             ):
                 with self.assertRaises(OSError):

@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from cc_cover import __version__
-from cc_cover.discovery import DiscoveryError, DiscoveryReport
-from cc_cover.engines import EngineError
-from cc_cover.formats import FormatError
-from cc_cover.models import (
+from cc_cover.core.discovery import DiscoveryError, DiscoveryReport
+from cc_cover.core.engines import EngineError
+from cc_cover.core.formats import FormatError
+from cc_cover.core.models import (
     DEFAULT_FASTER_WHISPER_MODEL,
     DoneEvent,
     ErrorEvent,
     PipelineOptions,
     RunDirEvent,
 )
-from cc_cover.pipeline import (
+from cc_cover.core.pipeline import (
     PipelineError,
     SubtitlePipeline,
     discover_for_options,
@@ -108,9 +108,7 @@ def load_exclusions(path: Path | None) -> set[Path]:
     return excluded
 
 
-def apply_exclusions(
-    report: DiscoveryReport, excluded: set[Path]
-) -> DiscoveryReport:
+def apply_exclusions(report: DiscoveryReport, excluded: set[Path]) -> DiscoveryReport:
     if not excluded:
         return report
     return replace(
@@ -212,7 +210,9 @@ def print_report(report: DiscoveryReport) -> None:
     print(f"冲突目标 TXT：{len(report.conflicts)}（默认不处理）")
     print(f"受保护非空 TXT：{len(report.protected_texts)}")
     for candidate in report.candidates:
-        print(f"  [{candidate.sample_id}] {candidate.target_path} ({candidate.initial_state})")
+        print(
+            f"  [{candidate.sample_id}] {candidate.target_path} ({candidate.initial_state})"
+        )
     for conflict in report.conflicts:
         print(f"  [冲突] {conflict.target_path}")
         for video in conflict.videos:
@@ -295,9 +295,7 @@ def command_transcribe(arguments: argparse.Namespace) -> int:
     excluded = load_exclusions(arguments.exclude)
     filtered_report = apply_exclusions(report, excluded)
     excluded_matches = [
-        candidate
-        for candidate in report.candidates
-        if candidate.video_path in excluded
+        candidate for candidate in report.candidates if candidate.video_path in excluded
     ]
     print_report(filtered_report)
     if excluded_matches:
@@ -360,7 +358,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "verify":
             return command_verify(arguments)
         raise ConfigError(f"未知命令：{arguments.command}")
-    except (ConfigError, DiscoveryError, EngineError, FormatError, PipelineError) as exc:
+    except (
+        ConfigError,
+        DiscoveryError,
+        EngineError,
+        FormatError,
+        PipelineError,
+    ) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         if isinstance(exc, (PipelineError, EngineError)):
             emit_event(

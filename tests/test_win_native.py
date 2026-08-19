@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cc_cover.win_native import SingleInstanceLock, focus_existing_window
+from cc_cover.gui.win_native import SingleInstanceLock, focus_existing_window
 
 
 class SingleInstanceLockTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class SingleInstanceLockTests(unittest.TestCase):
             child_code = (
                 "import sys, time\n"
                 "from pathlib import Path\n"
-                "from cc_cover.win_native import SingleInstanceLock\n"
+                "from cc_cover.gui.win_native import SingleInstanceLock\n"
                 "lock = SingleInstanceLock(Path(sys.argv[1]))\n"
                 "print(lock.acquire(), flush=True)\n"
                 "time.sleep(10)\n"
@@ -69,7 +69,9 @@ class SingleInstanceLockTests(unittest.TestCase):
         self.assertIsInstance(focus_existing_window(""), bool)
 
 
-@unittest.skipIf(os.name == "nt", "Windows 使用命名互斥体，文件锁回退在非 Windows 平台验证")
+@unittest.skipIf(
+    os.name == "nt", "Windows 使用命名互斥体，文件锁回退在非 Windows 平台验证"
+)
 class SingleInstanceLockFileFallbackTests(unittest.TestCase):
     def test_file_lock_rejects_live_second_instance(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -86,9 +88,7 @@ class SingleInstanceLockFileFallbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             lock_path = root / "instance.lock"
-            dead = subprocess.Popen(
-                [sys.executable, "-c", "pass"], shell=False
-            )
+            dead = subprocess.Popen([sys.executable, "-c", "pass"], shell=False)
             dead.wait()
             lock_path.write_text(f"{dead.pid}\n", encoding="ascii")
 

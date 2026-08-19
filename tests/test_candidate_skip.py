@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from cc_cover.discovery import discover
-from cc_cover.engines import EngineError
-from cc_cover.models import Candidate, Phase, Segment
-from cc_cover.pipeline import (
+from cc_cover.core.discovery import discover
+from cc_cover.core.engines import EngineError
+from cc_cover.core.models import Candidate, Phase, Segment
+from cc_cover.core.pipeline import (
     PipelineError,
     PipelineOptions,
     SubtitlePipeline,
@@ -102,17 +102,28 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             funasr_engine.transcribe.return_value = (list(SEGMENTS), {})
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", side_effect=failing_extract
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio",
+                    side_effect=failing_extract,
+                ),
             ):
                 pipeline.execute()
 
-            candidate_a = next(c for c in pipeline.candidates if c.video_path.name == "a.mp4")
-            candidate_b = next(c for c in pipeline.candidates if c.video_path.name == "b.mp4")
+            candidate_a = next(
+                c for c in pipeline.candidates if c.video_path.name == "a.mp4"
+            )
+            candidate_b = next(
+                c for c in pipeline.candidates if c.video_path.name == "b.mp4"
+            )
 
             self.assertIn(candidate_a.sample_id, pipeline.candidate_failures)
             self.assertNotIn(candidate_b.sample_id, pipeline.candidate_failures)
@@ -144,8 +155,12 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             pipeline, videos = _build_pipeline(root, ["a.mp4", "b.mp4"])
-            candidate_a = next(c for c in pipeline.candidates if c.video_path.name == "a.mp4")
-            candidate_b = next(c for c in pipeline.candidates if c.video_path.name == "b.mp4")
+            candidate_a = next(
+                c for c in pipeline.candidates if c.video_path.name == "a.mp4"
+            )
+            candidate_b = next(
+                c for c in pipeline.candidates if c.video_path.name == "b.mp4"
+            )
 
             stat = candidate_a.video_path.stat()
             candidate_a.video_path.write_bytes(b"changed-after-discovery")
@@ -158,12 +173,18 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             funasr_engine.transcribe.return_value = (list(SEGMENTS), {})
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
             ):
                 engines = pipeline._load_engines_if_needed(
                     pipeline.manifest["phases"]["remaining"]
@@ -224,12 +245,18 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             funasr_engine.transcribe.return_value = (list(SEGMENTS), {})
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
             ):
                 pipeline.execute()
 
@@ -245,12 +272,18 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             funasr_engine.transcribe.side_effect = RuntimeError("推理失败")
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
             ):
                 with self.assertRaises(RuntimeError):
                     pipeline.execute()
@@ -284,13 +317,19 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             funasr_engine.transcribe.return_value = (list(SEGMENTS), {})
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
-            ) as extract:
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ) as extract,
+            ):
                 engines = pipeline._load_engines_if_needed(
                     pipeline.manifest["phases"]["remaining"]
                 )
@@ -307,8 +346,12 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             pipeline, _videos = _build_pipeline(root, ["a.mp4", "b.mp4"])
-            candidate_a = next(c for c in pipeline.candidates if c.video_path.name == "a.mp4")
-            candidate_b = next(c for c in pipeline.candidates if c.video_path.name == "b.mp4")
+            candidate_a = next(
+                c for c in pipeline.candidates if c.video_path.name == "a.mp4"
+            )
+            candidate_b = next(
+                c for c in pipeline.candidates if c.video_path.name == "b.mp4"
+            )
 
             # a 的字幕段结构合法但数量不足，触发质量门禁失败（而非处理失败）。
             insufficient = [Segment(0, 1000, "太短")]

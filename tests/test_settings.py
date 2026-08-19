@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cc_cover.settings import (
+from cc_cover.gui.settings import (
     GuiSettings,
     SettingsError,
     load_gui_settings,
@@ -88,9 +88,7 @@ class GuiPreferencesTests(unittest.TestCase):
             loaded = load_gui_settings(root)
 
             self.assertEqual(loaded, expected)
-            self.assertIn(
-                "D:/视频", settings_file(root).read_text(encoding="utf-8")
-            )
+            self.assertIn("D:/视频", settings_file(root).read_text(encoding="utf-8"))
 
     def test_load_falls_back_to_default_hf_token_for_invalid_value(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

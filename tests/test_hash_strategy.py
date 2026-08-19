@@ -10,15 +10,15 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-from cc_cover.discovery import (
+from cc_cover.core.discovery import (
     discover,
     fingerprint,
     fingerprints_match,
     fingerprints_match_quick,
     sha256_file,
 )
-from cc_cover.models import Phase, PipelineOptions, Segment
-from cc_cover.pipeline import (
+from cc_cover.core.models import Phase, PipelineOptions, Segment
+from cc_cover.core.pipeline import (
     PipelineError,
     SubtitlePipeline,
     options_to_dict,
@@ -26,9 +26,7 @@ from cc_cover.pipeline import (
 )
 
 
-CAPTION_PAYLOAD = (
-    "00:00\r\n你好世界\r\n\r\n00:02\r\nPyTorch 2.5\r\n".encode("utf-8")
-)
+CAPTION_PAYLOAD = "00:00\r\n你好世界\r\n\r\n00:02\r\nPyTorch 2.5\r\n".encode("utf-8")
 
 
 EXECUTE_SEGMENTS = (
@@ -163,7 +161,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
             os.utime(video, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
             with mock.patch(
-                "cc_cover.discovery.sha256_file", wraps=sha256_file
+                "cc_cover.core.discovery.sha256_file", wraps=sha256_file
             ) as hasher:
                 validate_candidates(
                     [candidate],
@@ -180,16 +178,14 @@ class PipelineHashStrategyTests(unittest.TestCase):
     def test_verify_quick_checks_video_with_hash_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            pipeline, video, target, payload = self._pipeline(
-                root, hash_videos=True
-            )
+            pipeline, video, target, payload = self._pipeline(root, hash_videos=True)
             target.write_bytes(payload)
             stat = video.stat()
             video.write_bytes(b"video-xyz")
             os.utime(video, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
             with mock.patch(
-                "cc_cover.discovery.sha256_file", wraps=sha256_file
+                "cc_cover.core.discovery.sha256_file", wraps=sha256_file
             ) as hasher:
                 report = pipeline.verify()
 
@@ -199,9 +195,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
     def test_run_candidates_uses_quick_checks_before_and_after(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            pipeline, video, _target, _payload = self._pipeline(
-                root, hash_videos=True
-            )
+            pipeline, video, _target, _payload = self._pipeline(root, hash_videos=True)
             sample_id = pipeline.candidates[0].sample_id
             stat = video.stat()
             video.write_bytes(b"video-xyz")
@@ -211,20 +205,21 @@ class PipelineHashStrategyTests(unittest.TestCase):
             funasr_engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
-            with mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
-            ), mock.patch(
-                "cc_cover.discovery.sha256_file", wraps=sha256_file
-            ) as hasher:
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
+                mock.patch(
+                    "cc_cover.core.discovery.sha256_file", wraps=sha256_file
+                ) as hasher,
+            ):
                 pipeline.run_candidates(
                     [sample_id],
                     {"funasr": funasr_engine, "faster_whisper": faster_engine},
                 )
 
             hasher.assert_not_called()
-            self.assertTrue(
-                pipeline.engine_output("funasr", sample_id).is_file()
-            )
+            self.assertTrue(pipeline.engine_output("funasr", sample_id).is_file())
             self.assertTrue(
                 pipeline.engine_output("faster_whisper", sample_id).is_file()
             )
@@ -233,9 +228,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
         """一个候选紧接着跑完两个引擎，不是分两轮——用事件顺序验证。"""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            pipeline, video, _target, _payload = self._pipeline(
-                root, hash_videos=False
-            )
+            pipeline, video, _target, _payload = self._pipeline(root, hash_videos=False)
             sample_id = pipeline.candidates[0].sample_id
 
             funasr_engine = mock.Mock()
@@ -243,9 +236,12 @@ class PipelineHashStrategyTests(unittest.TestCase):
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
             output = StringIO()
-            with mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=1.0
-            ), redirect_stdout(output):
+            with (
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                ),
+                redirect_stdout(output),
+            ):
                 pipeline.run_candidates(
                     [sample_id],
                     {"funasr": funasr_engine, "faster_whisper": faster_engine},
@@ -290,9 +286,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
         """候选级失败（指纹校验）跳过并记录，不再中止整批、不再向上抛异常。"""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            pipeline, video, _target, _payload = self._pipeline(
-                root, hash_videos=True
-            )
+            pipeline, video, _target, _payload = self._pipeline(root, hash_videos=True)
             sample_id = pipeline.candidates[0].sample_id
             stat = video.stat()
             video.write_bytes(b"video-xyz")
@@ -300,7 +294,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
 
             funasr_engine = mock.Mock()
             faster_engine = mock.Mock()
-            with mock.patch("cc_cover.pipeline.extract_audio") as extract:
+            with mock.patch("cc_cover.core.pipeline.extract_audio") as extract:
                 pipeline.run_candidates(
                     [sample_id],
                     {"funasr": funasr_engine, "faster_whisper": faster_engine},
@@ -317,9 +311,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
     def test_commit_full_hash_aborts_on_hidden_video_change(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            pipeline, video, target, _payload = self._pipeline(
-                root, hash_videos=True
-            )
+            pipeline, video, target, _payload = self._pipeline(root, hash_videos=True)
             self._stage_report(pipeline)
             stat = video.stat()
             video.write_bytes(b"video-xyz")
@@ -334,9 +326,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
     def test_commit_with_hash_off_uses_quick_check_only(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            pipeline, video, target, payload = self._pipeline(
-                root, hash_videos=False
-            )
+            pipeline, video, target, payload = self._pipeline(root, hash_videos=False)
             self._stage_report(pipeline)
             stat = video.stat()
             video.write_bytes(b"video-xyz")
@@ -350,9 +340,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
     def test_commit_with_hash_on_succeeds_when_video_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
-            pipeline, _video, target, payload = self._pipeline(
-                root, hash_videos=True
-            )
+            pipeline, _video, target, payload = self._pipeline(root, hash_videos=True)
             self._stage_report(pipeline)
 
             report = pipeline.commit()
@@ -391,14 +379,21 @@ class PipelineHashStrategyTests(unittest.TestCase):
             funasr_engine.transcribe.return_value = (list(EXECUTE_SEGMENTS), {})
             faster_engine = mock.Mock()
             faster_engine.transcribe.return_value = (list(EXECUTE_SEGMENTS), {})
-            with mock.patch(
-                "cc_cover.discovery.sha256_file", wraps=sha256_file
-            ) as hasher, mock.patch(
-                "cc_cover.pipeline.FunASREngine", return_value=funasr_engine
-            ), mock.patch(
-                "cc_cover.pipeline.FasterWhisperEngine", return_value=faster_engine
-            ), mock.patch(
-                "cc_cover.pipeline.extract_audio", return_value=3.0
+            with (
+                mock.patch(
+                    "cc_cover.core.discovery.sha256_file", wraps=sha256_file
+                ) as hasher,
+                mock.patch(
+                    "cc_cover.core.pipeline.FunASREngine",
+                    return_value=funasr_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    return_value=faster_engine,
+                ),
+                mock.patch(
+                    "cc_cover.core.pipeline.extract_audio", return_value=3.0
+                ),
             ):
                 report = discover([root], hash_videos=True)
                 candidate = report.candidates[0]
@@ -414,9 +409,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
                     },
                     "options": options_to_dict(options),
                 }
-                pipeline = SubtitlePipeline(
-                    options, run_dir, [candidate], [], manifest
-                )
+                pipeline = SubtitlePipeline(options, run_dir, [candidate], [], manifest)
                 pipeline.execute()
 
             video_hashes = [

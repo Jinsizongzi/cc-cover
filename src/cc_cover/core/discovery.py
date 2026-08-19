@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from cc_cover.engines import probe_duration
-from cc_cover.formats import text_is_whitespace_only
-from cc_cover.models import Candidate, Fingerprint, ProtectedText
+from cc_cover.core.engines import probe_duration
+from cc_cover.core.formats import text_is_whitespace_only
+from cc_cover.core.models import Candidate, Fingerprint, ProtectedText
 
 
 VIDEO_EXTENSIONS = frozenset(
@@ -159,9 +159,7 @@ def discover(
         conflict_videos.update(videos)
         conflicts.append(TargetConflict(target_path=entries[0][1], videos=videos))
 
-    all_videos = [
-        entry for entries in entries_by_target.values() for entry in entries
-    ]
+    all_videos = [entry for entries in entries_by_target.values() for entry in entries]
     candidates: list[Candidate] = []
     for video, target in sorted(all_videos, key=lambda item: str(item[0]).casefold()):
         if video in conflict_videos:
@@ -186,9 +184,7 @@ def discover(
                 video_fingerprint=fingerprint(video, include_hash=hash_videos),
                 target_fingerprint=fingerprint(target, include_hash=True),
                 video_duration_s=(
-                    probe_duration(video, ffmpeg=ffmpeg)
-                    if probe_durations
-                    else None
+                    probe_duration(video, ffmpeg=ffmpeg) if probe_durations else None
                 ),
             )
         )

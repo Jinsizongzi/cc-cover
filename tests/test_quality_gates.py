@@ -6,10 +6,10 @@ import unittest
 import uuid
 from pathlib import Path
 
-from cc_cover.discovery import discover
-from cc_cover.formats import render_segments
-from cc_cover.models import Candidate, Fingerprint, PipelineOptions, Segment
-from cc_cover.pipeline import SubtitlePipeline, options_to_dict, write_json_atomic
+from cc_cover.core.discovery import discover
+from cc_cover.core.formats import render_segments
+from cc_cover.core.models import Candidate, Fingerprint, PipelineOptions, Segment
+from cc_cover.core.pipeline import SubtitlePipeline, options_to_dict, write_json_atomic
 
 
 def make_candidate(root: Path) -> Candidate:
@@ -50,9 +50,7 @@ def segments(
     duration_ms = max(1, round(duration_seconds * 1000.0))
     step = duration_ms // len(texts)
     metadata_list = (
-        metadata
-        if isinstance(metadata, list)
-        else [metadata or {}] * len(texts)
+        metadata if isinstance(metadata, list) else [metadata or {}] * len(texts)
     )
     result: list[Segment] = []
     for index, text in enumerate(texts):
@@ -176,7 +174,9 @@ class QualityGateWarningTests(unittest.TestCase):
             funasr = ["a" * 9 + str(index) for index in range(5)]
             report = quality_report_for(root, funasr, funasr)
 
-        self.assertTrue(any("文本密度告警" in warning for warning in report["warnings"]))
+        self.assertTrue(
+            any("文本密度告警" in warning for warning in report["warnings"])
+        )
         self.assertFalse(any("文本密度异常" in error for error in report["errors"]))
         self.assertTrue(report["passed"])
         self.assertEqual(report["warning_count"], len(report["warnings"]))
@@ -188,7 +188,9 @@ class QualityGateWarningTests(unittest.TestCase):
             funasr = ["a" * 34 + f"{index:02d}" for index in range(20)]
             report = quality_report_for(root, funasr, funasr)
 
-        self.assertTrue(any("文本密度告警" in warning for warning in report["warnings"]))
+        self.assertTrue(
+            any("文本密度告警" in warning for warning in report["warnings"])
+        )
         self.assertFalse(any("文本密度异常" in error for error in report["errors"]))
         self.assertTrue(report["passed"])
 
@@ -224,10 +226,10 @@ class QualityGateWarningTests(unittest.TestCase):
                 ["a" * 10 + "0"] * 4 + ["b" * 10 + "4", "c" * 10 + "5"],
             )
 
-        self.assertTrue(any("连续重复字幕告警" in warning for warning in report["warnings"]))
-        self.assertFalse(
-            any("连续重复字幕过多" in error for error in report["errors"])
+        self.assertTrue(
+            any("连续重复字幕告警" in warning for warning in report["warnings"])
         )
+        self.assertFalse(any("连续重复字幕过多" in error for error in report["errors"]))
         self.assertTrue(report["passed"])
 
     def test_median_segment_length_outside_3_40_warns(self) -> None:
@@ -268,16 +270,12 @@ class QualityGateConfidenceTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "faster-whisper 置信度告警" in warning
-                and "avg_logprob" in warning
+                "faster-whisper 置信度告警" in warning and "avg_logprob" in warning
                 for warning in report["warnings"]
             )
         )
         self.assertFalse(
-            any(
-                "no_speech_prob" in warning
-                for warning in report["warnings"]
-            )
+            any("no_speech_prob" in warning for warning in report["warnings"])
         )
         self.assertTrue(report["passed"])
         confidence = report["faster_whisper_confidence"]
@@ -299,16 +297,12 @@ class QualityGateConfidenceTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "faster-whisper 置信度告警" in warning
-                and "no_speech_prob" in warning
+                "faster-whisper 置信度告警" in warning and "no_speech_prob" in warning
                 for warning in report["warnings"]
             )
         )
         self.assertFalse(
-            any(
-                "avg_logprob" in warning
-                for warning in report["warnings"]
-            )
+            any("avg_logprob" in warning for warning in report["warnings"])
         )
         self.assertTrue(report["passed"])
         self.assertEqual(
@@ -336,17 +330,9 @@ class QualityGateConfidenceTests(unittest.TestCase):
         self.assertEqual(confidence["avg_logprob_min"], -1.2)
         self.assertEqual(confidence["no_speech_prob_max"], 0.60)
         self.assertEqual(confidence["checked_segments"], 3)
-        self.assertTrue(
-            any(
-                "avg_logprob" in warning
-                for warning in report["warnings"]
-            )
-        )
+        self.assertTrue(any("avg_logprob" in warning for warning in report["warnings"]))
         self.assertFalse(
-            any(
-                "no_speech_prob" in warning
-                for warning in report["warnings"]
-            )
+            any("no_speech_prob" in warning for warning in report["warnings"])
         )
 
     def test_missing_confidence_metadata_skips_warnings(self) -> None:
@@ -360,12 +346,7 @@ class QualityGateConfidenceTests(unittest.TestCase):
         self.assertIsNone(confidence["avg_logprob_mean"])
         self.assertIsNone(confidence["no_speech_prob_max"])
         self.assertEqual(confidence["checked_segments"], 5)
-        self.assertFalse(
-            any(
-                "置信度告警" in warning
-                for warning in report["warnings"]
-            )
-        )
+        self.assertFalse(any("置信度告警" in warning for warning in report["warnings"]))
 
 
 class QualityGateConflictAuditTests(unittest.TestCase):
@@ -377,10 +358,7 @@ class QualityGateConflictAuditTests(unittest.TestCase):
             report = quality_report_for(root, funasr, faster)
 
         self.assertTrue(
-            any(
-                "high_risk 冲突审计：5 段" in warning
-                for warning in report["warnings"]
-            )
+            any("high_risk 冲突审计：5 段" in warning for warning in report["warnings"])
         )
         self.assertEqual(report["high_risk_count"], 5)
         self.assertEqual(report["alignment_summary"]["high_risk_count"], 5)
@@ -394,10 +372,7 @@ class QualityGateConflictAuditTests(unittest.TestCase):
 
         self.assertEqual(report["high_risk_count"], 0)
         self.assertFalse(
-            any(
-                "high_risk 冲突审计" in warning
-                for warning in report["warnings"]
-            )
+            any("high_risk 冲突审计" in warning for warning in report["warnings"])
         )
 
 
@@ -413,9 +388,7 @@ class QualityGateFormatErrorTests(unittest.TestCase):
                 caption_payload=b"not a valid caption payload\r\n",
             )
 
-        self.assertTrue(
-            any("格式校验失败" in error for error in report["errors"])
-        )
+        self.assertTrue(any("格式校验失败" in error for error in report["errors"]))
         self.assertFalse(report["passed"])
 
 
@@ -499,26 +472,15 @@ class QualityGateStageTests(unittest.TestCase):
         self.assertTrue(audit["passed"])
         self.assertTrue(audit["has_warnings"])
         self.assertEqual(audit["warning_count"], len(audit["warnings"]))
+        self.assertTrue(any("文本密度告警" in warning for warning in audit["warnings"]))
         self.assertTrue(
-            any("文本密度告警" in warning for warning in audit["warnings"])
+            any("双模型全文长度比告警" in warning for warning in audit["warnings"])
         )
         self.assertTrue(
-            any(
-                "双模型全文长度比告警" in warning
-                for warning in audit["warnings"]
-            )
+            any("faster-whisper 置信度告警" in warning for warning in audit["warnings"])
         )
         self.assertTrue(
-            any(
-                "faster-whisper 置信度告警" in warning
-                for warning in audit["warnings"]
-            )
-        )
-        self.assertTrue(
-            any(
-                "high_risk 冲突审计：5 段" in warning
-                for warning in audit["warnings"]
-            )
+            any("high_risk 冲突审计：5 段" in warning for warning in audit["warnings"])
         )
         self.assertEqual(persisted["warning_count"], audit["warning_count"])
         self.assertEqual(persisted["warning_sample_ids"], [sample_id])

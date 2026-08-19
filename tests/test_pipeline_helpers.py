@@ -9,13 +9,13 @@ from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 
-from cc_cover.discovery import discover
-from cc_cover.engines import (
+from cc_cover.core.discovery import discover
+from cc_cover.core.engines import (
     configure_model_cache,
     local_faster_whisper_model,
     local_funasr_model,
 )
-from cc_cover.models import (
+from cc_cover.core.models import (
     Candidate,
     EngineStartEvent,
     Fingerprint,
@@ -24,7 +24,9 @@ from cc_cover.models import (
     ProgressEvent,
     Segment,
 )
-from cc_cover.pipeline import (
+from cc_cover.core.pipeline import (
+    PipelineError,
+    SubtitlePipeline,
     emit_event,
     engine_phase,
     extract_filename_hotwords,
@@ -32,8 +34,6 @@ from cc_cover.pipeline import (
     load_json,
     options_from_dict,
     options_to_dict,
-    PipelineError,
-    SubtitlePipeline,
     validate_segments,
     write_bytes_atomic,
 )
@@ -205,9 +205,7 @@ class PipelineHelperTests(unittest.TestCase):
             whisper_model.mkdir(parents=True)
 
             resolved_funasr = local_funasr_model("fsmn-vad", funasr_cache)
-            resolved_whisper = local_faster_whisper_model(
-                "large-v3", whisper_cache
-            )
+            resolved_whisper = local_faster_whisper_model("large-v3", whisper_cache)
 
         self.assertEqual(Path(resolved_funasr), snapshot.resolve())
         self.assertEqual(Path(resolved_whisper), whisper_model.resolve())
@@ -276,7 +274,9 @@ class PipelineHelperTests(unittest.TestCase):
         )
 
     def test_progress_event_serializes_to_dict(self) -> None:
-        event = ProgressEvent(engine="faster_whisper", index=2, total=5, video_path="a.mp4")
+        event = ProgressEvent(
+            engine="faster_whisper", index=2, total=5, video_path="a.mp4"
+        )
 
         self.assertEqual(
             event.to_dict(),

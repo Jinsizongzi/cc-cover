@@ -10,8 +10,8 @@ try:
 except ImportError:  # ubuntu CI 通常未安装 python3-tk
     tk = None
 
-from cc_cover.data_root import ensure_data_root, runtime_paths
-from cc_cover.win_native import SingleInstanceLock
+from cc_cover.gui.data_root import ensure_data_root, runtime_paths
+from cc_cover.gui.win_native import SingleInstanceLock
 
 
 @unittest.skipUnless(
@@ -20,7 +20,7 @@ from cc_cover.win_native import SingleInstanceLock
 )
 class GuiSmokeTests(unittest.TestCase):
     def _build_app(self) -> tuple[tk.Tk, object, SingleInstanceLock, Path]:
-        from cc_cover.gui import CCCoverApp
+        from cc_cover.gui.app import CCCoverApp
 
         temporary = tempfile.TemporaryDirectory()
         root_path = Path(temporary.name).resolve()
@@ -47,7 +47,10 @@ class GuiSmokeTests(unittest.TestCase):
         return root, app, lock, temporary
 
     def _teardown(
-        self, root: tk.Tk, lock: SingleInstanceLock, temporary: tempfile.TemporaryDirectory
+        self,
+        root: tk.Tk,
+        lock: SingleInstanceLock,
+        temporary: tempfile.TemporaryDirectory,
     ) -> None:
         try:
             root.destroy()
@@ -61,9 +64,7 @@ class GuiSmokeTests(unittest.TestCase):
             root.update_idletasks()
 
             self.assertIn("CC-Cover", root.title())
-            labels = [
-                str(self._notebook_tab_text(app, index)) for index in range(4)
-            ]
+            labels = [str(self._notebook_tab_text(app, index)) for index in range(4)]
             self.assertEqual(
                 [label.strip() for label in labels],
                 ["字幕补全", "功能说明", "操作指南", "运行日志"],
@@ -102,16 +103,14 @@ class GuiSmokeTests(unittest.TestCase):
         import time
         from unittest import mock
 
-        from cc_cover.gui import CCCoverApp
-        from cc_cover.settings import settings_file
+        from cc_cover.gui.app import CCCoverApp
+        from cc_cover.gui.settings import settings_file
 
         temporary = tempfile.TemporaryDirectory()
         root_path = Path(temporary.name).resolve()
         paths = runtime_paths(data_root=root_path)
         ensure_data_root(paths)
-        settings_file(paths.data_root).write_text(
-            "{ not valid json", encoding="utf-8"
-        )
+        settings_file(paths.data_root).write_text("{ not valid json", encoding="utf-8")
         lock = SingleInstanceLock(paths.data_root)
         if not lock.acquire():
             temporary.cleanup()
@@ -119,9 +118,7 @@ class GuiSmokeTests(unittest.TestCase):
         root = tk.Tk()
         root.withdraw()
         try:
-            with mock.patch(
-                "cc_cover.gui.messagebox.showwarning"
-            ) as showwarning:
+            with mock.patch("cc_cover.gui.app.messagebox.showwarning") as showwarning:
                 app = CCCoverApp(root, paths, lock)
                 deadline = time.monotonic() + 2.0
                 while not showwarning.called and time.monotonic() < deadline:

@@ -11,8 +11,8 @@ from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-from cc_cover.data_root import RuntimePaths
-from cc_cover.settings import GUI_DEVICE_CHOICES, GuiSettings
+from cc_cover.gui.data_root import RuntimePaths
+from cc_cover.gui.settings import GUI_DEVICE_CHOICES, GuiSettings
 
 TORCH_VERSION = "2.5.1"
 ASR_DEPENDENCIES = (
@@ -251,15 +251,11 @@ def setup_commands(
         )
     )
     if asr_targets:
-        commands.append(
-            [str(paths.venv_python), "-m", "pip", "install", *asr_targets]
-        )
+        commands.append([str(paths.venv_python), "-m", "pip", "install", *asr_targets])
     return commands
 
 
-def environment_check_command(
-    paths: RuntimePaths, accelerator: str = "cpu"
-) -> list[str]:
+def environment_check_command(paths: RuntimePaths, accelerator: str = "cpu") -> list[str]:
     if accelerator not in {"cuda", "cpu"}:
         raise ValueError(f"不支持的加速器：{accelerator}")
     require_cuda = "True" if accelerator == "cuda" else "False"
@@ -313,7 +309,9 @@ def parse_installed_versions(output: str) -> dict[str, str]:
     }
 
 
-def _unsatisfied(name: str, specifier: SpecifierSet, installed: Mapping[str, str]) -> bool:
+def _unsatisfied(
+    name: str, specifier: SpecifierSet, installed: Mapping[str, str]
+) -> bool:
     """已装版本缺失、或不满足给定约束，即视为不满足。"""
     version_text = installed.get(name)
     return version_text is None or Version(version_text) not in specifier
@@ -385,7 +383,5 @@ def environment_status_label(
     return f"{base}（有更新可用）" if outdated else base
 
 
-NOT_INSTALLED_STATUS_LABEL = (
-    "尚未安装（已有装好的环境？点右侧“更改…”指定位置）"
-)
+NOT_INSTALLED_STATUS_LABEL = "尚未安装（已有装好的环境？点右侧“更改…”指定位置）"
 """数据根换过目录后最常见的困惑——旧环境其实还在，只是没指过去。"""

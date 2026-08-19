@@ -26,8 +26,8 @@ asr = [
 ]
 
 [project.scripts]
-cc-cover = "cc_cover.cli:main"
-cc-cover-gui = "cc_cover.gui:main"
+cc-cover = "cc_cover.core.cli:main"
+cc-cover-gui = "cc_cover.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

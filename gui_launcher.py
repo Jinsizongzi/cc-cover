@@ -1,4 +1,4 @@
-from cc_cover.gui import main
+from cc_cover.gui.app import main
 
 
 if __name__ == "__main__":

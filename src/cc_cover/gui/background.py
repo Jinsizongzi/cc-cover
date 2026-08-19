@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from cc_cover.progress import FailureInfo
+from cc_cover.gui.progress import FailureInfo
 
 
 class TaskCancelled(RuntimeError):
@@ -44,7 +44,7 @@ class ErrorOutcome:
 
 WorkerOutcome = IdleOutcome | DoneOutcome | CancelledOutcome | ErrorOutcome
 """GUI 进程内部 worker 线程 → UI 主线程的终态消息，不跨进程、不序列化，因此不像
-cc_cover.models.Event 那样带 kind 字段/Enum/to_dict/from_dict——那一套是 Event 为了
+cc_cover.core.models.Event 那样带 kind 字段/Enum/to_dict/from_dict——那一套是 Event 为了
 在跨进程 JSON 边界上还原具体子类型才需要的，同进程内类型信息不会丢，isinstance/
 match 足够分发。"""
 

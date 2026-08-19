@@ -14,16 +14,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
-from cc_cover.discovery import (
+from cc_cover.core.discovery import (
     DiscoveryReport,
     discover,
     fingerprint,
     fingerprints_match,
     fingerprints_match_quick,
 )
-from cc_cover.engines import (
+from cc_cover.core.engines import (
     FasterWhisperEngine,
     FunASREngine,
     EngineError,
@@ -32,13 +32,13 @@ from cc_cover.engines import (
     resolve_device,
     resolve_ffmpeg,
 )
-from cc_cover.formats import (
+from cc_cover.core.formats import (
     FormatError,
     normalize_text,
     render_segments,
     validate_rendered,
 )
-from cc_cover.models import (
+from cc_cover.core.models import (
     Candidate,
     CandidateFailedEvent,
     DEFAULT_FASTER_WHISPER_MODEL,
@@ -52,9 +52,7 @@ from cc_cover.models import (
 )
 
 
-ASCII_TOKEN_PATTERN = re.compile(
-    r"[A-Za-z]+(?:[._+#/-][A-Za-z0-9]+)*|\d+(?:\.\d+)?"
-)
+ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z]+(?:[._+#/-][A-Za-z0-9]+)*|\d+(?:\.\d+)?")
 FILENAME_HOTWORD_PATTERN = re.compile(r"[A-Za-z0-9]+")
 SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 

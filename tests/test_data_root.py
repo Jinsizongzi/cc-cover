@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cc_cover.data_root import (
+from cc_cover.gui.data_root import (
     apply_data_root,
     configured_data_root,
     default_data_root,
@@ -16,7 +16,7 @@ from cc_cover.data_root import (
     resolve_data_root,
     runtime_paths,
 )
-from cc_cover.settings import read_settings, settings_file, write_settings
+from cc_cover.gui.settings import read_settings, settings_file, write_settings
 
 
 class RuntimePathsTests(unittest.TestCase):
@@ -36,9 +36,7 @@ class RuntimePathsTests(unittest.TestCase):
             paths.venv_python,
             (root / "data" / "venv" / "Scripts" / "python.exe").resolve(),
         )
-        self.assertEqual(
-            paths.model_cache, (root / "data" / "model-cache").resolve()
-        )
+        self.assertEqual(paths.model_cache, (root / "data" / "model-cache").resolve())
         self.assertEqual(paths.runs_root, (root / "data" / "runs").resolve())
         self.assertEqual(paths.temp_root, (root / "data" / "temp").resolve())
 

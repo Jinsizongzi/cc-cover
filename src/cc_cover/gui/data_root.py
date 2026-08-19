@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from cc_cover.settings import read_settings, settings_file, write_settings
+from cc_cover.gui.settings import read_settings, settings_file, write_settings
 
 
 APP_DATA_DIRECTORY = "CC-Cover"

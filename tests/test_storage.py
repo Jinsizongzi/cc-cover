@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cc_cover.data_root import RuntimePaths, runtime_paths
-from cc_cover.storage import (
+from cc_cover.gui.data_root import RuntimePaths, runtime_paths
+from cc_cover.gui.storage import (
     ASR_DEPENDENCIES_BYTES,
     CLEANUP_WARNING_BYTES,
     DiskCheck,
@@ -25,7 +25,6 @@ from cc_cover.storage import (
     disk_precheck,
     disk_precheck_text,
     estimate_install_required_bytes,
-    format_size,
     install_download_bytes,
     list_runs,
     local_data_usage,
@@ -42,7 +41,9 @@ class EstimateBytesTests(unittest.TestCase):
         )
 
     def test_install_download_cuda_larger_than_cpu(self) -> None:
-        self.assertGreater(install_download_bytes("cuda"), install_download_bytes("cpu"))
+        self.assertGreater(
+            install_download_bytes("cuda"), install_download_bytes("cpu")
+        )
 
     def test_install_download_combines_torch_and_dependencies(self) -> None:
         self.assertEqual(
@@ -110,7 +111,7 @@ class DiskPrecheckTests(unittest.TestCase):
             target = Path(temporary) / "data"
             target.mkdir()
             usage = _usage(free_bytes=10 * 1024**3)
-            with patch("cc_cover.storage.shutil.disk_usage", return_value=usage):
+            with patch("cc_cover.gui.storage.shutil.disk_usage", return_value=usage):
                 check = disk_precheck(target, required_bytes=2 * 1024**3)
 
         self.assertTrue(check.sufficient)
@@ -123,7 +124,7 @@ class DiskPrecheckTests(unittest.TestCase):
             target = Path(temporary) / "data"
             target.mkdir()
             usage = _usage(free_bytes=1 * 1024**3)
-            with patch("cc_cover.storage.shutil.disk_usage", return_value=usage):
+            with patch("cc_cover.gui.storage.shutil.disk_usage", return_value=usage):
                 check = disk_precheck(target, required_bytes=2 * 1024**3)
 
         self.assertFalse(check.sufficient)
@@ -132,13 +133,15 @@ class DiskPrecheckTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "data"
             usage = _usage(free_bytes=10 * 1024**3)
-            with patch("cc_cover.storage.shutil.disk_usage", return_value=usage):
+            with patch("cc_cover.gui.storage.shutil.disk_usage", return_value=usage):
                 check = disk_precheck(target, required_bytes=1024**3)
 
         self.assertTrue(check.sufficient)
 
     def test_precheck_text_mentions_required_and_free(self) -> None:
-        check = disk_precheck_result(sufficient=False, required=4 * 1024**3, free=1 * 1024**3)
+        check = disk_precheck_result(
+            sufficient=False, required=4 * 1024**3, free=1 * 1024**3
+        )
 
         text = disk_precheck_text(check)
 
@@ -147,7 +150,9 @@ class DiskPrecheckTests(unittest.TestCase):
         self.assertIn("空间不足", text)
 
     def test_precheck_text_suggests_cleaning_runs_when_large(self) -> None:
-        check = disk_precheck_result(sufficient=False, required=4 * 1024**3, free=1 * 1024**3)
+        check = disk_precheck_result(
+            sufficient=False, required=4 * 1024**3, free=1 * 1024**3
+        )
 
         text = disk_precheck_text(check, runs_bytes=500 * 1024**3)
 
@@ -155,14 +160,18 @@ class DiskPrecheckTests(unittest.TestCase):
         self.assertIn("500.0 GB", text)
 
     def test_precheck_text_no_runs_suggestion_when_zero(self) -> None:
-        check = disk_precheck_result(sufficient=False, required=4 * 1024**3, free=1 * 1024**3)
+        check = disk_precheck_result(
+            sufficient=False, required=4 * 1024**3, free=1 * 1024**3
+        )
 
         text = disk_precheck_text(check)
 
         self.assertNotIn("运行目录", text)
 
     def test_precheck_text_sufficient_has_no_warning(self) -> None:
-        check = disk_precheck_result(sufficient=True, required=2 * 1024**3, free=20 * 1024**3)
+        check = disk_precheck_result(
+            sufficient=True, required=2 * 1024**3, free=20 * 1024**3
+        )
 
         text = disk_precheck_text(check)
 
@@ -249,9 +258,7 @@ def manifest_status(run_dir: Path, status: str, created: str | None = None) -> N
     payload: dict[str, object] = {"status": status}
     if created is not None:
         payload["created_at_utc"] = created
-    (run_dir / "manifest.json").write_text(
-        json.dumps(payload), encoding="utf-8"
-    )
+    (run_dir / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 class ListRunsTests(unittest.TestCase):
@@ -311,9 +318,7 @@ class ListRunsTests(unittest.TestCase):
             root = Path(temporary).resolve()
             run_dir = root / "runs" / "broken"
             run_dir.mkdir(parents=True)
-            (run_dir / "manifest.json").write_text(
-                "{not json", encoding="utf-8"
-            )
+            (run_dir / "manifest.json").write_text("{not json", encoding="utf-8")
 
             runs = list_runs(root / "runs")
 
@@ -412,9 +417,7 @@ def _usage(free_bytes: int) -> _FakeDiskUsage:
     return _FakeDiskUsage(free_bytes)
 
 
-def disk_precheck_result(
-    *, sufficient: bool, required: int, free: int
-) -> DiskCheck:
+def disk_precheck_result(*, sufficient: bool, required: int, free: int) -> DiskCheck:
     return DiskCheck(
         target=Path("."),
         required_bytes=required,
@@ -424,7 +427,9 @@ def disk_precheck_result(
 
 
 def _paths(root: Path) -> RuntimePaths:
-    return runtime_paths(frozen=True, bundle_root=root / "bundle", data_root=root / "data")
+    return runtime_paths(
+        frozen=True, bundle_root=root / "bundle", data_root=root / "data"
+    )
 
 
 def _write(path: Path, size: int) -> None:

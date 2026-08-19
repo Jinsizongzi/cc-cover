@@ -16,10 +16,10 @@ class ProjectContractTests(unittest.TestCase):
         project_root = Path(__file__).resolve().parents[1]
         files = [
             project_root / "README.md",
-            project_root / "src" / "cc_cover" / "gui.py",
-            project_root / "src" / "cc_cover" / "cli.py",
-            project_root / "src" / "cc_cover" / "models.py",
-            project_root / "src" / "cc_cover" / "pipeline.py",
+            project_root / "src" / "cc_cover" / "gui" / "app.py",
+            project_root / "src" / "cc_cover" / "core" / "cli.py",
+            project_root / "src" / "cc_cover" / "core" / "models.py",
+            project_root / "src" / "cc_cover" / "core" / "pipeline.py",
         ]
         drive_path = re.compile(r"[A-Za-z]:\\")
         obsolete_fragment = "-" + "app" + "ly"
