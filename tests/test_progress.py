@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+try:
+    import tkinter as tk
+    from tkinter import ttk
+except ImportError:  # ubuntu CI 通常未安装 python3-tk
+    tk = None
 
 from cc_cover.core.models import (
     DoneEvent,
@@ -17,6 +24,7 @@ from cc_cover.gui.progress import (
     FailureInfo,
     InstallProgressSnapshot,
     InstallProgressTracker,
+    ProgressPresenter,
     ProgressSnapshot,
     ProgressTracker,
     captured_events,
@@ -785,6 +793,82 @@ class InstallProgressTextTests(unittest.TestCase):
 
         self.assertNotIn("已下载约", text)
         self.assertIn("组件 1/6", text)
+
+
+@unittest.skipUnless(
+    sys.platform.startswith("win") and tk is not None, "需要真实 Tk 环境"
+)
+class ProgressPresenterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.progress = ttk.Progressbar(self.root, mode="indeterminate", length=260)
+        self.progress_var = tk.StringVar(value="")
+        self.presenter = ProgressPresenter(self.progress, self.progress_var)
+
+    def tearDown(self) -> None:
+        self.root.destroy()
+
+    def test_start_busy_switches_to_indeterminate_mode(self) -> None:
+        self.presenter.start_busy()
+
+        self.assertEqual(str(self.progress.cget("mode")), "indeterminate")
+
+    def test_stop_busy_leaves_var_untouched_when_nothing_tracked(self) -> None:
+        self.progress_var.set("之前的文案")
+
+        self.presenter.stop_busy()
+
+        self.assertEqual(self.progress_var.get(), "之前的文案")
+
+    def test_stop_busy_resets_var_and_elapsed_when_tracking_active(self) -> None:
+        self.presenter.start(total=10)
+
+        self.presenter.stop_busy()
+
+        self.assertEqual(self.progress_var.get(), "")
+        self.assertIsNone(self.presenter.elapsed())
+        self.assertEqual(str(self.progress.cget("mode")), "indeterminate")
+
+    def test_start_switches_to_determinate_and_sets_text(self) -> None:
+        self.presenter.start(total=5)
+
+        self.assertEqual(str(self.progress.cget("mode")), "determinate")
+        self.assertNotEqual(self.progress_var.get(), "")
+
+    def test_on_line_routes_to_progress_tracker_when_install_not_active(self) -> None:
+        self.presenter.start(total=1)
+
+        self.presenter.on_line("普通日志行\n")
+
+        self.assertNotIn("组件", self.progress_var.get())
+
+    def test_on_line_routes_to_install_tracker_when_install_active(self) -> None:
+        self.presenter.start_install(total_bytes=100, component_count=2)
+
+        self.presenter.on_line("正在下载……\n")
+
+        self.assertIn("组件", self.progress_var.get())
+
+    def test_on_install_component_updates_component_text(self) -> None:
+        self.presenter.start_install(total_bytes=100, component_count=2)
+
+        self.presenter.on_install_component(1, 2)
+
+        self.assertIn("组件 1/2", self.progress_var.get())
+
+    def test_elapsed_none_before_start(self) -> None:
+        self.assertIsNone(self.presenter.elapsed())
+
+    def test_elapsed_set_after_start(self) -> None:
+        self.presenter.start(total=1)
+
+        self.assertIsNotNone(self.presenter.elapsed())
+
+    def test_start_install_does_not_set_elapsed_anchor(self) -> None:
+        self.presenter.start_install(total_bytes=100, component_count=1)
+
+        self.assertIsNone(self.presenter.elapsed())
 
 
 if __name__ == "__main__":

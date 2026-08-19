@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import re
 import time
+import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
+from tkinter import ttk
 from typing import Mapping, Sequence
 
 from cc_cover.gui.human_readable import format_duration, format_size
@@ -465,3 +467,107 @@ def error_text(title: str, info: FailureInfo) -> str:
             f"已处理 {info.done_count}/{info.total_count} 个视频，产物已暂存。"
         )
     return "\n".join(lines) + "\n"
+
+
+class ProgressPresenter:
+    """确定进度条 + 忙碌转圈共用的挂件外壳。
+
+    唯一持有 progress/progress_var 的对象——CCCoverApp 不再直接调
+    configure()/start()/stop()/set()，只调这里的窄接口。elapsed() 必须在
+    stop_busy() 之前读：stop_busy() 会把计时锚点清空（ADR-0004）。
+    """
+
+    def __init__(self, progress: ttk.Progressbar, progress_var: tk.StringVar) -> None:
+        self.progress = progress
+        self.progress_var = progress_var
+        self._progress_tracker: ProgressTracker | None = None
+        self._install_tracker: InstallProgressTracker | None = None
+        self._session_started_at: float | None = None
+
+    def start_busy(self) -> None:
+        self.progress.configure(mode="indeterminate")
+        self.progress.start(10)
+
+    def stop_busy(self) -> None:
+        self.progress.stop()
+        if self._progress_tracker is None and self._install_tracker is None:
+            return
+        self._progress_tracker = None
+        self._session_started_at = None
+        self._install_tracker = None
+        self.progress_var.set("")
+        self.progress.configure(mode="indeterminate", value=0)
+
+    def start(self, total: int) -> None:
+        self._session_started_at = time.monotonic()
+        self._progress_tracker = ProgressTracker(
+            total=total, started_at=self._session_started_at
+        )
+        self.progress.configure(mode="determinate", maximum=100, value=0)
+        self.progress.stop()
+        self._refresh()
+        self.progress.after(500, self._schedule_refresh)
+
+    def _schedule_refresh(self) -> None:
+        if self._progress_tracker is None:
+            return
+        self._refresh()
+        self.progress.after(500, self._schedule_refresh)
+
+    def _refresh(self) -> None:
+        tracker = self._progress_tracker
+        if tracker is None:
+            return
+        snapshot = tracker.snapshot()
+        self.progress.configure(value=snapshot.percent)
+        self.progress_var.set(progress_text(snapshot))
+
+    def on_line(self, line: str) -> None:
+        if self._install_tracker is not None:
+            self._install_tracker.on_output(line)
+            self._refresh_install()
+            return
+        if self._progress_tracker is None:
+            return
+        self._progress_tracker.on_event(parse_event_line(line))
+        self._refresh()
+
+    def start_install(self, total_bytes: int, component_count: int) -> None:
+        self._install_tracker = InstallProgressTracker(
+            total_bytes=total_bytes,
+            component_count=component_count,
+            started_at=time.monotonic(),
+        )
+        self.progress.configure(mode="determinate", maximum=100, value=0)
+        self.progress.stop()
+        self._refresh_install()
+        self.progress.after(500, self._schedule_install_refresh)
+
+    def on_install_component(self, index: int, count: int) -> None:
+        if self._install_tracker is not None:
+            self._install_tracker.on_component(index)
+            self._refresh_install()
+
+    def _schedule_install_refresh(self) -> None:
+        if self._install_tracker is None:
+            return
+        self._refresh_install()
+        self.progress.after(500, self._schedule_install_refresh)
+
+    def _refresh_install(self) -> None:
+        tracker = self._install_tracker
+        if tracker is None:
+            return
+        snapshot = tracker.snapshot()
+        self.progress.configure(value=snapshot.percent)
+        self.progress_var.set(install_progress_text(snapshot))
+
+    def elapsed(self) -> float | None:
+        """本次运行会话的已耗时（进度开始到结束），用于完成提示音的判断。
+
+        只有 start() 设过计时锚点才非 None——start_install() 不设，装环境
+        永远不会触发"完成提示音"。
+        """
+        if self._session_started_at is None:
+            return None
+        return time.monotonic() - self._session_started_at
