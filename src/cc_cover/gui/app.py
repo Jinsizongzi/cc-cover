@@ -31,25 +31,7 @@ from cc_cover.gui.background import (
     run_in_background,
 )
 from cc_cover.gui.candidate_list import CandidateListPanel, scan_confirmation_stats
-from cc_cover.gui.commands import (
-    NOT_INSTALLED_STATUS_LABEL,
-    device_probe_commands,
-    environment_check_command,
-    environment_status_label,
-    needs_force_reinstall_prompt,
-    outdated_packages,
-    parse_installed_versions,
-    parsed_device,
-    parsed_nvidia_probe,
-    play_completion_sound,
-    python_candidates,
-    reinstall_scope,
-    resume_command,
-    scan_command,
-    setup_commands,
-    should_play_completion_sound,
-    transcribe_command,
-)
+from cc_cover.gui.commands import resume_command, scan_command, transcribe_command
 from cc_cover.gui.content import FEATURE_TEXT, GUIDE_TEXT
 from cc_cover.gui.data_root import (
     RuntimePaths,
@@ -59,7 +41,23 @@ from cc_cover.gui.data_root import (
     resolve_data_root,
     runtime_paths,
 )
+from cc_cover.gui.device import (
+    device_probe_commands,
+    parsed_device,
+    parsed_nvidia_probe,
+)
 from cc_cover.gui.dialogs import DialogHost, enrich_failure
+from cc_cover.gui.environment import (
+    NOT_INSTALLED_STATUS_LABEL,
+    environment_check_command,
+    environment_status_label,
+    needs_force_reinstall_prompt,
+    outdated_packages,
+    parse_installed_versions,
+    python_candidates,
+    reinstall_scope,
+    setup_commands,
+)
 from cc_cover.gui.human_readable import format_size, strip_ansi_escapes
 from cc_cover.gui.progress import (
     InstallProgressTracker,
@@ -96,7 +94,11 @@ from cc_cover.gui.storage import (
     model_cache_cleanup_text,
     runs_total_size,
 )
-from cc_cover.gui.tasks import TaskRunner
+from cc_cover.gui.tasks import (
+    TaskRunner,
+    play_completion_sound,
+    should_play_completion_sound,
+)
 from cc_cover.gui.win_native import (
     SingleInstanceLock,
     focus_existing_window,
