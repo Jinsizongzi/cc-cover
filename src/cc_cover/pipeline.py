@@ -41,6 +41,7 @@ from cc_cover.formats import (
 from cc_cover.models import (
     Candidate,
     CandidateFailedEvent,
+    DEFAULT_FASTER_WHISPER_MODEL,
     EngineStartEvent,
     Event,
     Phase,
@@ -394,7 +395,7 @@ def options_from_dict(value: Mapping[str, Any]) -> PipelineOptions:
         funasr_vad_model=str(value.get("funasr_vad_model", "fsmn-vad")),
         funasr_punc_model=str(value.get("funasr_punc_model", "ct-punc")),
         faster_whisper_model=str(
-            value.get("faster_whisper_model", "large-v3-turbo")
+            value.get("faster_whisper_model", DEFAULT_FASTER_WHISPER_MODEL)
         ),
         hotwords_file=(
             None
@@ -436,7 +437,7 @@ def load_hotwords(options: PipelineOptions, candidates: Sequence[Candidate]) -> 
         if key not in seen:
             seen.add(key)
             unique.append(value)
-    return unique[:120]
+    return unique[:200]
 
 
 def comparison_text(text: str) -> str:

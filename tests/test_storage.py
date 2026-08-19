@@ -100,7 +100,8 @@ class EstimateBytesTests(unittest.TestCase):
     def test_model_estimates_are_gigabyte_scale(self) -> None:
         self.assertGreater(FUNASR_MODELS_BYTES, 1024**3)
         self.assertLess(FUNASR_MODELS_BYTES, 5 * 1024**3)
-        self.assertLess(FAST_WHISPER_MODELS_BYTES, 3 * 1024**3)
+        self.assertGreater(FAST_WHISPER_MODELS_BYTES, 1024**3)
+        self.assertLess(FAST_WHISPER_MODELS_BYTES, 4 * 1024**3)
 
 
 class DiskPrecheckTests(unittest.TestCase):

@@ -11,7 +11,13 @@ from cc_cover import __version__
 from cc_cover.discovery import DiscoveryError, DiscoveryReport
 from cc_cover.engines import EngineError
 from cc_cover.formats import FormatError
-from cc_cover.models import DoneEvent, ErrorEvent, PipelineOptions, RunDirEvent
+from cc_cover.models import (
+    DEFAULT_FASTER_WHISPER_MODEL,
+    DoneEvent,
+    ErrorEvent,
+    PipelineOptions,
+    RunDirEvent,
+)
 from cc_cover.pipeline import (
     PipelineError,
     SubtitlePipeline,
@@ -44,7 +50,7 @@ DEFAULTS: dict[str, Any] = {
     "funasr_model": "paraformer-zh",
     "funasr_vad_model": "fsmn-vad",
     "funasr_punc_model": "ct-punc",
-    "faster_whisper_model": "large-v3-turbo",
+    "faster_whisper_model": DEFAULT_FASTER_WHISPER_MODEL,
     "hotwords_file": None,
     "hash_videos": True,
     "pilot_count": 2,

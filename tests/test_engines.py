@@ -30,6 +30,8 @@ def raw_segment(start: float, end: float, text: str = "hello") -> SimpleNamespac
 
 
 class FakeWhisperModel:
+    """模拟支持 hotwords 参数的现代版本 faster-whisper。"""
+
     def __init__(self, raw_segments: list[SimpleNamespace]) -> None:
         self.raw_segments = raw_segments
         self.last_kwargs: dict[str, object] = {}
@@ -46,9 +48,43 @@ class FakeWhisperModel:
         word_timestamps: bool = False,
         compression_ratio_threshold: float = 2.4,
         hallucination_silence_threshold: float = 2.0,
+        hotwords: str | None = None,
+        initial_prompt: str | None = None,
         **kwargs: object,
     ) -> tuple[object, SimpleNamespace]:
         self.last_kwargs = dict(kwargs)
+        if hotwords is not None:
+            self.last_kwargs["hotwords"] = hotwords
+        if initial_prompt is not None:
+            self.last_kwargs["initial_prompt"] = initial_prompt
+        return iter(self.raw_segments), SimpleNamespace(duration_after_vad=None)
+
+
+class FakeWhisperModelWithoutHotwords:
+    """模拟不支持 hotwords 参数的旧版本 faster-whisper（只有 initial_prompt）。"""
+
+    def __init__(self, raw_segments: list[SimpleNamespace]) -> None:
+        self.raw_segments = raw_segments
+        self.last_kwargs: dict[str, object] = {}
+
+    def transcribe(
+        self,
+        path: str,
+        language: str = "zh",
+        beam_size: int = 5,
+        best_of: int = 5,
+        temperature: list[float] | None = None,
+        vad_filter: bool = True,
+        condition_on_previous_text: bool = False,
+        word_timestamps: bool = False,
+        compression_ratio_threshold: float = 2.4,
+        hallucination_silence_threshold: float = 2.0,
+        initial_prompt: str | None = None,
+        **kwargs: object,
+    ) -> tuple[object, SimpleNamespace]:
+        self.last_kwargs = dict(kwargs)
+        if initial_prompt is not None:
+            self.last_kwargs["initial_prompt"] = initial_prompt
         return iter(self.raw_segments), SimpleNamespace(duration_after_vad=None)
 
 
@@ -61,6 +97,18 @@ class FasterWhisperEngineTests(unittest.TestCase):
         )
         engine = FasterWhisperEngine(options, "cpu", "int8")
         engine.model = FakeWhisperModel(raw_segments)
+        return engine
+
+    def _engine_without_hotwords_support(
+        self, raw_segments: list[SimpleNamespace]
+    ) -> FasterWhisperEngine:
+        options = PipelineOptions(
+            roots=[Path.cwd()],
+            runs_root=Path("runs"),
+            model_cache=Path("models"),
+        )
+        engine = FasterWhisperEngine(options, "cpu", "int8")
+        engine.model = FakeWhisperModelWithoutHotwords(raw_segments)
         return engine
 
     def test_tail_segment_start_beyond_duration_is_skipped_with_log(self) -> None:
@@ -90,6 +138,35 @@ class FasterWhisperEngineTests(unittest.TestCase):
         self.assertEqual([segment.text for segment in segments], ["hello"])
         self.assertNotIn("hotwords", engine.model.last_kwargs)
         self.assertNotIn("initial_prompt", engine.model.last_kwargs)
+
+    def test_nonempty_hotwords_sets_both_hotwords_and_initial_prompt_when_supported(
+        self,
+    ) -> None:
+        """hotwords 和 initial_prompt 是两套独立机制，两个都支持时两个都传，
+        不再是二选一的回退关系。"""
+        engine = self._engine([raw_segment(0.0, 5.0, "hello")])
+
+        engine.transcribe(Path("audio.wav"), 5.0, ["PyTorch", "Django"])
+
+        self.assertEqual(engine.model.last_kwargs["hotwords"], "PyTorch, Django")
+        self.assertEqual(
+            engine.model.last_kwargs["initial_prompt"], "术语表：PyTorch、Django"
+        )
+
+    def test_nonempty_hotwords_falls_back_to_initial_prompt_when_hotwords_unsupported(
+        self,
+    ) -> None:
+        """旧版本 faster-whisper 不支持 hotwords 参数时，仍然靠 initial_prompt 兜底。"""
+        engine = self._engine_without_hotwords_support(
+            [raw_segment(0.0, 5.0, "hello")]
+        )
+
+        engine.transcribe(Path("audio.wav"), 5.0, ["PyTorch", "Django"])
+
+        self.assertNotIn("hotwords", engine.model.last_kwargs)
+        self.assertEqual(
+            engine.model.last_kwargs["initial_prompt"], "术语表：PyTorch、Django"
+        )
 
     def test_segment_seconds_convert_to_milliseconds_with_rounding(self) -> None:
         engine = self._engine([raw_segment(0.0, 1.234)])

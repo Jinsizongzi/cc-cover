@@ -34,7 +34,7 @@ _Avoid_: Stage（跟上面的既有含义会撞——那个词已经被"暂存"�
 _Avoid_: 把候选级失败跟质量门禁失败（Phase.QUALITY_GATE）混为一谈——质量门禁失败是另一件事，维持"全批候选必须都通过质量门禁才写回"的既有全有全无语义不变，不参与候选级失败的"部分成功"逻辑。
 
 **Event**：
-CLI 子进程（`pipeline.py`/`cli.py`）向 GUI 报告运行状态用的结构化消息，逐行 JSON，跟人读文字打印在同一条 stdout 上，靠是否为合法 JSON 区分。已知 kind：`engine_start`、`progress`、`run_dir`、`error`、`done`。
+CLI 子进程（`pipeline.py`/`cli.py`）向 GUI 报告运行状态用的结构化消息，逐行 JSON，跟人读文字打印在同一条 stdout 上，靠是否为合法 JSON 区分。已知 kind：`engine_start`、`progress`、`run_dir`、`error`、`done`、`candidate_failed`。
 _Avoid_: Log line（指人读文字那一行，跟 Event 是两回事，别混用）；WorkerOutcome（那是 GUI 进程内部线程间的消息，不跨进程、不序列化，外形容易跟 Event 混，实际是两个不同边界上的概念，见下）
 
 **WorkerOutcome**：

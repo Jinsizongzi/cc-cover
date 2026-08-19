@@ -102,20 +102,20 @@ class HotwordTests(unittest.TestCase):
 
         self.assertEqual(result, ["GPT", "GPT4"])
 
-    def test_load_hotwords_caps_combined_unique_at_120_after_dedupe(self) -> None:
+    def test_load_hotwords_caps_combined_unique_at_200_after_dedupe(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             hotwords_file = Path(temporary) / "hotwords.txt"
             file_terms = [f"term{i:03d}" for i in range(60)]
             hotwords_file.write_text("\n".join(file_terms) + "\n", encoding="utf-8")
-            candidates = [hotword_candidate(f"extra{i}") for i in range(65)]
+            candidates = [hotword_candidate(f"extra{i}") for i in range(150)]
 
             result = load_hotwords(hotwords_options(hotwords_file), candidates)
 
-        self.assertEqual(len(result), 120)
+        self.assertEqual(len(result), 200)
         self.assertEqual(result[:60], file_terms)
         self.assertEqual(result[60], "extra0")
-        self.assertEqual(result[-1], "extra59")
-        self.assertNotIn("extra60", result)
+        self.assertEqual(result[-1], "extra139")
+        self.assertNotIn("extra140", result)
 
     def test_load_hotwords_returns_empty_without_fallback(self) -> None:
         candidates = [hotword_candidate("01"), hotword_candidate("机器学习")]
@@ -201,12 +201,12 @@ class PipelineHelperTests(unittest.TestCase):
             )
             snapshot.mkdir(parents=True)
             whisper_cache = root / "faster-whisper"
-            whisper_model = whisper_cache / "large-v3-turbo"
+            whisper_model = whisper_cache / "large-v3"
             whisper_model.mkdir(parents=True)
 
             resolved_funasr = local_funasr_model("fsmn-vad", funasr_cache)
             resolved_whisper = local_faster_whisper_model(
-                "large-v3-turbo", whisper_cache
+                "large-v3", whisper_cache
             )
 
         self.assertEqual(Path(resolved_funasr), snapshot.resolve())

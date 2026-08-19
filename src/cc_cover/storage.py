@@ -15,9 +15,10 @@ CLEANUP_WARNING_BYTES = 5 * 1024**3
 # torch + torchaudio 轮子：CPU 约 330MB，CUDA cu121 约 2.7GB，均留余量。
 TORCH_CPU_BYTES = 400 * 1024**2
 TORCH_CUDA_BYTES = 3200 * 1024**2
-# 默认模型：FunASR（paraformer-large + fsmn-vad + ct-punc）约 2GB，large-v3-turbo 约 1.6GB。
+# 默认模型：FunASR（paraformer-large + fsmn-vad + ct-punc）约 2GB，large-v3 约 3GB
+# （相比之前的默认 large-v3-turbo 约 1.6GB 更大——turbo 是裁剪过解码层的蒸馏版）。
 FUNASR_MODELS_BYTES = 2500 * 1024**2
-FAST_WHISPER_MODELS_BYTES = 1600 * 1024**2
+FAST_WHISPER_MODELS_BYTES = 3100 * 1024**2
 # 其余 ASR 依赖轮子（funasr、faster-whisper、ctranslate2 等）约 250MB。
 ASR_DEPENDENCIES_BYTES = 400 * 1024**2
 # venv/临时目录开销与磁盘碎片余量。

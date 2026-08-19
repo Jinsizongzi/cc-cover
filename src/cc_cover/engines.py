@@ -470,9 +470,12 @@ class FasterWhisperEngine:
             "hallucination_silence_threshold": 2.0,
         }
         if hotwords:
+            # hotwords 和 initial_prompt 是两套独立机制（前者是解码期硬性偏置，
+            # 后者只给第一个窗口的 prompt 定调），当前版本支持 hotwords 时不再
+            # 互斥跳过 initial_prompt——两个都传，各自发挥作用。
             if "hotwords" in parameters:
                 kwargs["hotwords"] = ", ".join(hotwords)
-            else:
+            if "initial_prompt" in parameters:
                 kwargs["initial_prompt"] = "术语表：" + "、".join(hotwords)
         unsupported = [key for key in kwargs if key not in parameters]
         if unsupported:

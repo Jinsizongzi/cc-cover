@@ -313,6 +313,11 @@ class ProtectedText:
         )
 
 
+DEFAULT_FASTER_WHISPER_MODEL = "large-v3"
+"""faster-whisper 默认模型；cli.py 的 DEFAULTS 字典、pipeline.py 的
+options_from_dict() 都从这里导入，避免三处独立硬编码互相漏改。"""
+
+
 @dataclass
 class PipelineOptions:
     roots: list[Path]
@@ -325,7 +330,7 @@ class PipelineOptions:
     funasr_model: str = "paraformer-zh"
     funasr_vad_model: str = "fsmn-vad"
     funasr_punc_model: str = "ct-punc"
-    faster_whisper_model: str = "large-v3-turbo"
+    faster_whisper_model: str = DEFAULT_FASTER_WHISPER_MODEL
     hotwords_file: Path | None = None
     hash_videos: bool = True
     pilot_count: int = 2

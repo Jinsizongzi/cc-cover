@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 变更
+
+- faster-whisper 默认模型由 `large-v3-turbo` 换成完整版 `large-v3`：当前硬件下转写耗时仍远快于实时，换完整版让双模型交叉校验（质量门禁）更可信。
+- 热词列表上限由 120 条提升到 200 条；`hotwords`/`initial_prompt` 两个参数不再互斥回退，当前安装的 faster-whisper 版本支持 `hotwords` 时，`initial_prompt` 也一并传入，不再被跳过。
+
 ## [0.7.0] - 2026-08-19
 
 ### 变更
