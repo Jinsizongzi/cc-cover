@@ -284,7 +284,10 @@ class PipelineHashStrategyTests(unittest.TestCase):
             ],
         )
 
-    def test_run_candidates_quick_check_aborts_before_transcription(self) -> None:
+    def test_run_candidates_quick_check_skips_candidate_before_transcription(
+        self,
+    ) -> None:
+        """候选级失败（指纹校验）跳过并记录，不再中止整批、不再向上抛异常。"""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             pipeline, video, _target, _payload = self._pipeline(
@@ -298,14 +301,15 @@ class PipelineHashStrategyTests(unittest.TestCase):
             funasr_engine = mock.Mock()
             faster_engine = mock.Mock()
             with mock.patch("cc_cover.pipeline.extract_audio") as extract:
-                with self.assertRaises(PipelineError) as caught:
-                    pipeline.run_candidates(
-                        [sample_id],
-                        {"funasr": funasr_engine, "faster_whisper": faster_engine},
-                    )
+                pipeline.run_candidates(
+                    [sample_id],
+                    {"funasr": funasr_engine, "faster_whisper": faster_engine},
+                )
 
-            self.assertIn("转写前", str(caught.exception))
-            self.assertEqual(caught.exception.phase, Phase.FINGERPRINT)
+            self.assertIn(sample_id, pipeline.candidate_failures)
+            failure = pipeline.candidate_failures[sample_id]
+            self.assertIn("转写前", failure["reason"])
+            self.assertEqual(failure["phase"], Phase.FINGERPRINT.value)
             extract.assert_not_called()
             funasr_engine.transcribe.assert_not_called()
             faster_engine.transcribe.assert_not_called()

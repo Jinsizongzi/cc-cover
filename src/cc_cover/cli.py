@@ -24,6 +24,16 @@ class ConfigError(RuntimeError):
     pass
 
 
+def _print_candidate_failures(pipeline: SubtitlePipeline) -> None:
+    """打印本次运行里被跳过的候选清单（候选级失败，未整批中止）。"""
+    print(
+        f"警告：{len(pipeline.candidate_failures)} 个候选处理失败，已跳过，未写回：",
+        file=sys.stderr,
+    )
+    for failure in pipeline.candidate_failures.values():
+        print(f"  - {failure['video_path']}：{failure['reason']}", file=sys.stderr)
+
+
 DEFAULTS: dict[str, Any] = {
     "runs_root": "runs",
     "model_cache": "model-cache",
@@ -299,8 +309,10 @@ def command_transcribe(arguments: argparse.Namespace) -> int:
     emit_event(RunDirEvent(path=str(pipeline.run_dir)))
     pipeline.execute()
     print(f"字幕已写回并复核通过：{pipeline.run_dir}")
+    if pipeline.candidate_failures:
+        _print_candidate_failures(pipeline)
     emit_event(DoneEvent(run_dir=str(pipeline.run_dir)))
-    return 0
+    return 1 if pipeline.candidate_failures else 0
 
 
 def command_resume(arguments: argparse.Namespace) -> int:
@@ -308,20 +320,26 @@ def command_resume(arguments: argparse.Namespace) -> int:
     if pipeline.manifest.get("status") == "committed":
         report = pipeline.verify()
         print(f"复核通过，共 {report['verified_count']} 个字幕文件。")
+        if pipeline.candidate_failures:
+            _print_candidate_failures(pipeline)
         emit_event(DoneEvent(run_dir=str(pipeline.run_dir)))
-        return 0
+        return 1 if pipeline.candidate_failures else 0
     pipeline.execute()
     print(f"字幕已写回并复核通过：{pipeline.run_dir}")
+    if pipeline.candidate_failures:
+        _print_candidate_failures(pipeline)
     emit_event(DoneEvent(run_dir=str(pipeline.run_dir)))
-    return 0
+    return 1 if pipeline.candidate_failures else 0
 
 
 def command_verify(arguments: argparse.Namespace) -> int:
     pipeline = SubtitlePipeline.resume(arguments.run_dir)
     report = pipeline.verify()
     print(f"复核通过，共 {report['verified_count']} 个字幕文件。")
+    if pipeline.candidate_failures:
+        _print_candidate_failures(pipeline)
     emit_event(DoneEvent(run_dir=str(pipeline.run_dir)))
-    return 0
+    return 1 if pipeline.candidate_failures else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

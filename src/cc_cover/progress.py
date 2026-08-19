@@ -9,6 +9,7 @@ from typing import Mapping, Sequence
 
 from cc_cover.human_readable import format_duration, format_size
 from cc_cover.models import (
+    DoneEvent,
     ErrorEvent,
     Event,
     Phase,
@@ -117,6 +118,19 @@ def run_dir_from_events(output: str) -> Path | None:
         if isinstance(event, RunDirEvent):
             resolved = Path(event.path)
     return resolved
+
+
+def done_event_present(output: str) -> bool:
+    """已收集输出里是否有 done 事件。
+
+    候选级失败会让 cli.py 的 transcribe/resume 命令以非零退出码正常返回
+    （而不是抛异常）——退出码单独看无法区分"CLI 进程本身报告完成，只是
+    有候选被跳过"和"CLI 进程真的中止/崩溃"，两者都表现为非零退出码。
+    这里用有没有 done 事件来做这个区分：main() 只在命令正常返回（哪怕
+    退出码非零）时才会走到 emit_event(DoneEvent(...))，中止/崩溃走的是
+    except 分支，只会有 error 事件、不会有 done 事件。
+    """
+    return any(isinstance(event, DoneEvent) for event in captured_events(output))
 
 
 def last_error_event(output: str) -> ErrorEvent | None:

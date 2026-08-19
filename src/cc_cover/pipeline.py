@@ -40,6 +40,7 @@ from cc_cover.formats import (
 )
 from cc_cover.models import (
     Candidate,
+    CandidateFailedEvent,
     EngineStartEvent,
     Event,
     Phase,
@@ -80,6 +81,19 @@ class PipelineError(RuntimeError):
         self.phase = phase
         self.video_path = video_path
         self.sample_id = sample_id
+
+
+class _TerminalEngineFailure(Exception):
+    """标记系统性失败：engine.transcribe() 自身抛出的异常、或引擎未加载这个
+    编程错误。候选级失败（指纹校验、音频提取、字幕段校验）改为跳过当前
+    候选、继续处理下一个；只有这两种视为系统性，需要照常向上传播、中止
+    整批——用一个专门的包裹类型标记，而不是按异常类型区分，因为
+    EngineError/PipelineError 两种类型在候选级失败和系统性失败里都会用到。
+    """
+
+    def __init__(self, original: BaseException) -> None:
+        super().__init__(str(original))
+        self.original = original
 
 
 def utc_now() -> str:
@@ -200,6 +214,11 @@ def build_summary_text(run_dir: Path) -> str:
     if verification is not None and not bool(verification.get("passed", True)):
         verify_failures = [str(item) for item in verification.get("failures") or []]
 
+    candidate_failures = manifest.get("candidate_failures") or []
+    candidate_failure_dicts = [
+        item for item in candidate_failures if isinstance(item, dict)
+    ]
+
     lines = [
         "CC-Cover 运行摘要",
         "================",
@@ -213,6 +232,7 @@ def build_summary_text(run_dir: Path) -> str:
         "----",
         f"候选总数：{candidate_count}",
         f"已排除：{excluded_count}（本次不处理）",
+        f"处理失败（已跳过）：{len(candidate_failure_dicts)}",
         f"质量门禁通过：{len(passed_samples)}",
         f"质量门禁失败：{len(failed_samples)}",
         f"写回成功：{committed_count}",
@@ -231,6 +251,18 @@ def build_summary_text(run_dir: Path) -> str:
         for sample in warning_samples:
             lines.append(_sample_line(sample))
             lines.extend(f"  - {warning}" for warning in sample.get("warnings") or [])
+    else:
+        lines.append("（无）")
+
+    lines += ["", "处理失败（已跳过）明细", "--------"]
+    if candidate_failure_dicts:
+        for failure in candidate_failure_dicts:
+            lines.append(
+                "{} {}".format(
+                    failure.get("sample_id", ""), failure.get("video_path", "")
+                ).strip()
+            )
+            lines.append(f"  - {failure.get('reason', '')}")
     else:
         lines.append("（无）")
 
@@ -274,6 +306,7 @@ class CompletionStats:
     elapsed_seconds: float | None
     written_count: int
     warning_count: int
+    failed_count: int = 0
 
 
 def _timestamp_epoch(value: Any) -> float | None:
@@ -313,10 +346,13 @@ def run_completion_stats(run_dir: Path) -> CompletionStats:
             written = len(entries)
 
     warnings = int(stage.get("warning_count") or 0) if stage else 0
+    candidate_failures = manifest.get("candidate_failures") if manifest else None
+    failed_count = len(candidate_failures) if isinstance(candidate_failures, list) else 0
     return CompletionStats(
         elapsed_seconds=elapsed,
         written_count=written,
         warning_count=warnings,
+        failed_count=failed_count,
     )
 
 
@@ -609,6 +645,11 @@ class SubtitlePipeline:
             options.device, options.compute_type
         )
         self.hotwords = load_hotwords(options, self.candidates)
+        self.candidate_failures: dict[str, dict[str, Any]] = {
+            str(item["sample_id"]): dict(item)
+            for item in manifest.get("candidate_failures") or []
+            if isinstance(item, dict) and item.get("sample_id")
+        }
 
     @classmethod
     def create(
@@ -656,6 +697,7 @@ class SubtitlePipeline:
             "runtime": None,
             "stage": None,
             "commit": None,
+            "candidate_failures": [],
         }
         write_json_atomic(run_dir / "manifest.json", manifest)
         return cls(options, run_dir, report.candidates, report.protected_texts, manifest)
@@ -721,6 +763,28 @@ class SubtitlePipeline:
         except Exception:
             return False
 
+    def _eligible_candidates(
+        self, sample_ids: Sequence[str] | None = None
+    ) -> list[Candidate]:
+        """排除候选级失败（self.candidate_failures）后的候选；stage()/commit()/
+        verify() 都只处理这个子集，让它们对候选级失败的候选保持沉默——
+        跳过继续，不是整批中止。传 sample_ids 则先限定在这个子集里筛选。
+        """
+        selected = (
+            self.candidates
+            if sample_ids is None
+            else [
+                candidate
+                for candidate in self.candidates
+                if candidate.sample_id in sample_ids
+            ]
+        )
+        return [
+            candidate
+            for candidate in selected
+            if candidate.sample_id not in self.candidate_failures
+        ]
+
     def _build_engine(self, engine_name: str) -> Any:
         if engine_name == "funasr":
             return FunASREngine(self.options, self.device)
@@ -765,9 +829,11 @@ class SubtitlePipeline:
         """逐候选交替处理：一个候选紧接着跑完两个引擎，再处理下一个候选。
 
         音频抽取和转写前后的指纹校验都收在候选级别，两个引擎共用同一份
-        wav、共用同一对前后校验——不是每个引擎各来一遍。任一引擎失败，
-        异常照常向上传播，中止这批排在后面的候选（跟改动前的中止语义
-        一致，只是现在是一个合并循环）。
+        wav、共用同一对前后校验——不是每个引擎各来一遍。候选级失败（指纹
+        校验、音频提取、字幕段校验）记录后跳过，继续处理下一批里的下一个
+        候选，不再中止整批；只有 engine.transcribe() 自身失败（或引擎未
+        加载这个编程错误）视为系统性失败，照常向上传播、中止整批。已经
+        记录过失败的候选（含 resume 时从 manifest 恢复的）不会被重试。
         """
         selected = [
             candidate for candidate in self.candidates if candidate.sample_id in sample_ids
@@ -775,7 +841,8 @@ class SubtitlePipeline:
         pending = [
             candidate
             for candidate in selected
-            if any(
+            if candidate.sample_id not in self.candidate_failures
+            and any(
                 not self.output_complete(engine_name, candidate)
                 for engine_name in _ENGINE_NAMES
             )
@@ -783,86 +850,135 @@ class SubtitlePipeline:
         if not pending:
             return
         for index, candidate in enumerate(pending, start=1):
-            before = fingerprint(candidate.video_path, include_hash=False)
-            if not fingerprints_match_quick(before, candidate.video_fingerprint):
-                raise PipelineError(
-                    f"视频在转写前发生变化：{candidate.video_path}",
-                    phase=Phase.FINGERPRINT,
-                    sample_id=candidate.sample_id,
-                    video_path=str(candidate.video_path),
-                )
-            wav_path = self.run_dir / "work" / f"{candidate.sample_id}.wav"
-            duration: float | None = None
             try:
-                for engine_name in _ENGINE_NAMES:
-                    if self.output_complete(engine_name, candidate):
-                        continue
-                    if engine_name not in engines:
-                        # 调用方（execute()）本该已经用 _load_engines_if_needed()
-                        # 保证：这批候选里只要有任何一个未完成的引擎，两个引擎
-                        # 就都会被装好传进来。走到这里说明调用方没有遵守这个
-                        # 前提——是编程错误，用 PipelineError 报出来，不要让
-                        # 一个裸 KeyError 冒出去，看不出真实原因。
-                        raise PipelineError(
+                self._run_one_candidate(candidate, index, len(pending), engines)
+            except _TerminalEngineFailure as exc:
+                raise exc.original from exc
+            except (PipelineError, EngineError, OSError) as exc:
+                self._record_candidate_failure(candidate, exc)
+
+    def _run_one_candidate(
+        self,
+        candidate: Candidate,
+        index: int,
+        total: int,
+        engines: Mapping[str, Any],
+    ) -> None:
+        before = fingerprint(candidate.video_path, include_hash=False)
+        if not fingerprints_match_quick(before, candidate.video_fingerprint):
+            raise PipelineError(
+                f"视频在转写前发生变化：{candidate.video_path}",
+                phase=Phase.FINGERPRINT,
+                sample_id=candidate.sample_id,
+                video_path=str(candidate.video_path),
+            )
+        wav_path = self.run_dir / "work" / f"{candidate.sample_id}.wav"
+        duration: float | None = None
+        try:
+            for engine_name in _ENGINE_NAMES:
+                if self.output_complete(engine_name, candidate):
+                    continue
+                if engine_name not in engines:
+                    # 调用方（execute()）本该已经用 _load_engines_if_needed()
+                    # 保证：这批候选里只要有任何一个未完成的引擎，两个引擎
+                    # 就都会被装好传进来。走到这里说明调用方没有遵守这个
+                    # 前提——是编程错误，不是这一个候选独有的问题，视为
+                    # 系统性失败，中止整批而不是跳过。
+                    raise _TerminalEngineFailure(
+                        PipelineError(
                             f"引擎 {engine_name} 未加载，无法处理候选",
                             phase=Phase.SETUP,
                             sample_id=candidate.sample_id,
                             video_path=str(candidate.video_path),
                         )
-                    engine = engines[engine_name]
-                    print(
-                        f"[{engine_name} {index}/{len(pending)}] {candidate.video_path}",
-                        flush=True,
                     )
-                    emit_event(
-                        ProgressEvent(
-                            engine=engine_name,
-                            index=index,
-                            total=len(pending),
-                            video_path=str(candidate.video_path),
-                        )
+                engine = engines[engine_name]
+                print(
+                    f"[{engine_name} {index}/{total}] {candidate.video_path}",
+                    flush=True,
+                )
+                emit_event(
+                    ProgressEvent(
+                        engine=engine_name,
+                        index=index,
+                        total=total,
+                        video_path=str(candidate.video_path),
                     )
-                    if duration is None:
-                        duration = extract_audio(
-                            self.ffmpeg, candidate.video_path, wav_path
-                        )
-                    started = time.perf_counter()
+                )
+                if duration is None:
+                    duration = extract_audio(
+                        self.ffmpeg, candidate.video_path, wav_path
+                    )
+                started = time.perf_counter()
+                try:
                     segments, metadata = engine.transcribe(
                         wav_path, duration, self.hotwords
                     )
-                    validate_segments(
-                        segments,
-                        duration,
-                        engine=engine_name,
-                        sample_id=candidate.sample_id,
-                        video_path=str(candidate.video_path),
-                    )
-                    write_json_atomic(
-                        self.engine_output(engine_name, candidate.sample_id),
-                        {
-                            "schema_version": "1.0",
-                            "sample_id": candidate.sample_id,
-                            "source_path": str(candidate.video_path),
-                            "engine": engine_name,
-                            "duration_seconds": round(duration, 6),
-                            "elapsed_total_seconds": round(
-                                time.perf_counter() - started, 6
-                            ),
-                            "metadata": metadata,
-                            "segments": [segment.to_dict() for segment in segments],
-                        },
-                    )
-            finally:
-                if wav_path.exists():
-                    wav_path.unlink()
-            after = fingerprint(candidate.video_path, include_hash=False)
-            if not fingerprints_match_quick(after, candidate.video_fingerprint):
-                raise PipelineError(
-                    f"视频在转写后发生变化：{candidate.video_path}",
-                    phase=Phase.FINGERPRINT,
+                except _TerminalEngineFailure:
+                    raise
+                except Exception as exc:
+                    raise _TerminalEngineFailure(exc) from exc
+                validate_segments(
+                    segments,
+                    duration,
+                    engine=engine_name,
                     sample_id=candidate.sample_id,
                     video_path=str(candidate.video_path),
                 )
+                write_json_atomic(
+                    self.engine_output(engine_name, candidate.sample_id),
+                    {
+                        "schema_version": "1.0",
+                        "sample_id": candidate.sample_id,
+                        "source_path": str(candidate.video_path),
+                        "engine": engine_name,
+                        "duration_seconds": round(duration, 6),
+                        "elapsed_total_seconds": round(
+                            time.perf_counter() - started, 6
+                        ),
+                        "metadata": metadata,
+                        "segments": [segment.to_dict() for segment in segments],
+                    },
+                )
+        finally:
+            if wav_path.exists():
+                wav_path.unlink()
+        after = fingerprint(candidate.video_path, include_hash=False)
+        if not fingerprints_match_quick(after, candidate.video_fingerprint):
+            raise PipelineError(
+                f"视频在转写后发生变化：{candidate.video_path}",
+                phase=Phase.FINGERPRINT,
+                sample_id=candidate.sample_id,
+                video_path=str(candidate.video_path),
+            )
+
+    def _record_candidate_failure(
+        self, candidate: Candidate, exc: BaseException
+    ) -> None:
+        """记录一次候选级失败并跳过，不中止整批；持久化到 manifest 供 resume 用。"""
+        phase = getattr(exc, "phase", None) or Phase.SETUP
+        reason = str(exc)
+        print(
+            f"候选处理失败，跳过：{candidate.video_path}（{reason}）",
+            flush=True,
+        )
+        emit_event(
+            CandidateFailedEvent(
+                phase=phase,
+                reason=reason,
+                video_path=str(candidate.video_path),
+                sample_id=candidate.sample_id,
+            )
+        )
+        self.candidate_failures[candidate.sample_id] = {
+            "sample_id": candidate.sample_id,
+            "video_path": str(candidate.video_path),
+            "phase": phase.value,
+            "reason": reason,
+        }
+        self.update_manifest(
+            candidate_failures=list(self.candidate_failures.values())
+        )
 
     def quality_report(
         self,
@@ -995,12 +1111,15 @@ class SubtitlePipeline:
 
     def stage(self, sample_ids: Sequence[str]) -> dict[str, Any]:
         validate_protected(self.protected, phase=Phase.QUALITY_GATE)
+        # 候选级失败（跳过继续）的候选排除在外——它们已经在 run_candidates()
+        # 里被记录过一次，这里再拿同一份指纹基线重新校验只会重复抓到同一个
+        # 已知问题、把它当成新错误再抛一次，中止掉本该照常写回的其余候选。
         validate_candidates(
-            self.candidates, require_initial_target=True, phase=Phase.QUALITY_GATE
+            self._eligible_candidates(),
+            require_initial_target=True,
+            phase=Phase.QUALITY_GATE,
         )
-        selected = [
-            candidate for candidate in self.candidates if candidate.sample_id in sample_ids
-        ]
+        selected = self._eligible_candidates(sample_ids)
         reports: list[dict[str, Any]] = []
         for candidate in selected:
             funasr_payload = self.load_engine_output("funasr", candidate)
@@ -1049,12 +1168,20 @@ class SubtitlePipeline:
         }
         for report in reports:
             merged[str(report["sample_id"])] = report
-        all_ids = list(self.manifest["phases"]["all"])
+        all_ids = [
+            sample_id
+            for sample_id in self.manifest["phases"]["all"]
+            if sample_id not in self.candidate_failures
+        ]
         staged_all = all(sample_id in merged for sample_id in all_ids)
         all_passed = staged_all and all(
             bool(merged[sample_id]["passed"]) for sample_id in all_ids
         )
-        selected_passed = all(bool(merged[sample_id]["passed"]) for sample_id in sample_ids)
+        selected_passed = all(
+            sample_id in merged and bool(merged[sample_id]["passed"])
+            for sample_id in sample_ids
+            if sample_id not in self.candidate_failures
+        )
         stage_report = {
             "schema_version": "1.0",
             "run_id": self.manifest["run_id"],
@@ -1086,7 +1213,7 @@ class SubtitlePipeline:
         )
         if not selected_passed:
             raise PipelineError(
-                "试样或全量质量门禁未通过，未写回课程目录", phase=Phase.QUALITY_GATE
+                "候选未全部就绪或未通过质量门禁，未写回课程目录", phase=Phase.QUALITY_GATE
             )
         return stage_report
 
@@ -1100,12 +1227,15 @@ class SubtitlePipeline:
             str(item["sample_id"]): item for item in stage_report["samples"]
         }
         validate_protected(self.protected, phase=Phase.WRITEBACK)
+        # 候选级失败（跳过继续）的候选从未进入 stage_report，写回时排除，不
+        # 强求它们凑齐——写回只覆盖真正处理完、通过质量门禁的那部分候选。
+        eligible = self._eligible_candidates()
         validate_candidates(
-            self.candidates, require_initial_target=True, phase=Phase.WRITEBACK
+            eligible, require_initial_target=True, phase=Phase.WRITEBACK
         )
         backups = self.run_dir / "backups"
         payloads: dict[str, bytes] = {}
-        for candidate in self.candidates:
+        for candidate in eligible:
             prepared = self.run_dir / "prepared" / f"{candidate.sample_id}.txt"
             payload = prepared.read_bytes()
             validate_rendered(payload)
@@ -1131,7 +1261,7 @@ class SubtitlePipeline:
             )
         # 写回前全量复核：视频哈希保护开启时做第 2 次（也是最后一次）全量读；
         # 关闭时只做快速校验。
-        for candidate in self.candidates:
+        for candidate in eligible:
             current_video = fingerprint(
                 candidate.video_path,
                 include_hash=candidate.video_fingerprint.sha256 is not None,
@@ -1145,10 +1275,10 @@ class SubtitlePipeline:
                 )
         committed: list[Candidate] = []
         try:
-            for candidate in self.candidates:
+            for candidate in eligible:
                 write_bytes_atomic(candidate.target_path, payloads[candidate.sample_id])
                 committed.append(candidate)
-            for candidate in self.candidates:
+            for candidate in eligible:
                 actual = candidate.target_path.read_bytes()
                 if actual != payloads[candidate.sample_id]:
                     raise PipelineError(
@@ -1178,7 +1308,7 @@ class SubtitlePipeline:
                     candidate.target_path.read_bytes()
                 ).hexdigest(),
             }
-            for candidate in self.candidates
+            for candidate in eligible
         ]
         report = {
             "schema_version": "1.0",
@@ -1196,7 +1326,10 @@ class SubtitlePipeline:
         validate_protected(self.protected, phase=Phase.VERIFY)
         failures: list[str] = []
         entries: list[dict[str, Any]] = []
-        for candidate in self.candidates:
+        # 候选级失败（跳过继续）的候选从未写回，复核时排除，不然会被误报
+        # 成"目标字幕为空"。
+        eligible = self._eligible_candidates()
+        for candidate in eligible:
             current_video = fingerprint(candidate.video_path, include_hash=False)
             if not fingerprints_match_quick(current_video, candidate.video_fingerprint):
                 failures.append(f"视频变化：{candidate.video_path}")
@@ -1244,8 +1377,11 @@ class SubtitlePipeline:
 
     def execute(self) -> Path:
         validate_protected(self.protected, phase=Phase.SETUP)
+        # 候选级失败（跳过继续）的候选排除在外——否则 resume() 之后每次
+        # execute() 一开始就会拿同一份指纹基线重新抓到同一个已经记录过的
+        # 候选级失败，永远卡在这里，连 run_candidates() 都进不去。
         validate_candidates(
-            self.candidates, require_initial_target=True, phase=Phase.SETUP
+            self._eligible_candidates(), require_initial_target=True, phase=Phase.SETUP
         )
         self.update_manifest(
             status="running",

@@ -67,6 +67,7 @@ from cc_cover.progress import (
     FailureInfo,
     InstallProgressTracker,
     ProgressTracker,
+    done_event_present,
     error_text,
     failure_info_from_command,
     failure_info_from_run,
@@ -862,7 +863,7 @@ class CCCoverApp(ttk.Frame):
             raise TaskCancelled(
                 output.strip() or "任务已由用户停止。运行产物可以稍后继续。"
             )
-        if return_code != 0:
+        if return_code != 0 and not done_event_present(output):
             raise RuntimeError(output.strip() or f"任务执行失败，退出代码：{return_code}")
         return output
 
@@ -2202,6 +2203,16 @@ class CCCoverApp(ttk.Frame):
                     text="无",
                     style="Body.TLabel",
                 ).grid(row=3, column=1, sticky="nw", pady=(4, 0), padx=(10, 0))
+            if stats.failed_count:
+                ttk.Label(body, text="处理失败：", style="Body.TLabel").grid(
+                    row=4, column=0, sticky="nw", pady=(4, 0)
+                )
+                ttk.Button(
+                    body,
+                    text=f"{stats.failed_count} 个候选已跳过（点击查看 summary.txt）",
+                    style="Action.TButton",
+                    command=lambda: self._open_summary(run_dir),
+                ).grid(row=4, column=1, sticky="w", padx=(10, 0), pady=(4, 0))
         actions = ttk.Frame(dialog, style="Panel.TFrame", padding=(20, 12, 20, 18))
         actions.pack(fill="x")
         if run_dir is not None:

@@ -190,6 +190,7 @@ class CliTests(unittest.TestCase):
             output = StringIO()
             pipeline = mock.Mock()
             pipeline.run_dir = root / "runs" / "run-1"
+            pipeline.candidate_failures = {}
             with mock.patch(
                 "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
             ) as create:
@@ -261,6 +262,7 @@ class CliTests(unittest.TestCase):
             output = StringIO()
             pipeline = mock.Mock()
             pipeline.run_dir = root / "runs" / "run-1"
+            pipeline.candidate_failures = {}
             with mock.patch(
                 "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
             ):
@@ -291,6 +293,42 @@ class CliTests(unittest.TestCase):
             ],
         )
 
+    def test_transcribe_returns_nonzero_when_candidates_were_skipped(self) -> None:
+        """候选级失败不再抛异常，但整体仍算失败——退出码要跟以前一样非零。"""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_candidates(root, ["only"])
+            output = StringIO()
+            errors = StringIO()
+            pipeline = mock.Mock()
+            pipeline.run_dir = root / "runs" / "run-1"
+            pipeline.candidate_failures = {
+                "CC-1": {"video_path": "bad.mp4", "reason": "音频提取失败"}
+            }
+            with mock.patch(
+                "cc_cover.cli.SubtitlePipeline.create", return_value=pipeline
+            ):
+                with redirect_stdout(output), redirect_stderr(errors):
+                    result = main(
+                        [
+                            "transcribe",
+                            str(root),
+                            "--no-hash-videos",
+                            "--runs-root",
+                            str(root / "runs"),
+                            "--model-cache",
+                            str(root / "models"),
+                        ]
+                    )
+
+        self.assertEqual(result, 1)
+        self.assertIn(f"字幕已写回并复核通过：{pipeline.run_dir}", output.getvalue())
+        self.assertIn("1 个候选处理失败", errors.getvalue())
+        self.assertIn("bad.mp4：音频提取失败", errors.getvalue())
+        lines = output.getvalue().splitlines()
+        events = [json.loads(line) for line in lines if line.startswith("{")]
+        self.assertIn({"event": "done", "run_dir": str(pipeline.run_dir)}, events)
+
     def test_resume_already_committed_emits_done_event_without_executing(
         self,
     ) -> None:
@@ -299,6 +337,7 @@ class CliTests(unittest.TestCase):
         pipeline.run_dir = Path("runs/run-1")
         pipeline.manifest = {"status": "committed"}
         pipeline.verify.return_value = {"verified_count": 3}
+        pipeline.candidate_failures = {}
         with mock.patch(
             "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
         ):
@@ -319,6 +358,7 @@ class CliTests(unittest.TestCase):
         pipeline = mock.Mock()
         pipeline.run_dir = Path("runs/run-1")
         pipeline.manifest = {"status": "staged_partial"}
+        pipeline.candidate_failures = {}
         with mock.patch(
             "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
         ):
@@ -339,6 +379,7 @@ class CliTests(unittest.TestCase):
         pipeline = mock.Mock()
         pipeline.run_dir = Path("runs/run-1")
         pipeline.verify.return_value = {"verified_count": 5}
+        pipeline.candidate_failures = {}
         with mock.patch(
             "cc_cover.cli.SubtitlePipeline.resume", return_value=pipeline
         ):

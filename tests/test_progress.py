@@ -21,6 +21,7 @@ from cc_cover.progress import (
     ProgressTracker,
     captured_events,
     detect_stage,
+    done_event_present,
     error_text,
     failure_info,
     failure_info_from_command,
@@ -207,6 +208,25 @@ class RunDirFromEventsTests(unittest.TestCase):
     def test_returns_none_without_run_dir_event(self) -> None:
         self.assertIsNone(run_dir_from_events("没有运行目录"))
         self.assertIsNone(run_dir_from_events(""))
+
+
+class DoneEventPresentTests(unittest.TestCase):
+    def test_true_when_done_event_captured(self) -> None:
+        output = (
+            "[funasr 1/2] E:\\videos\\a.mp4\n"
+            + json.dumps(DoneEvent(run_dir="C:\\runs\\a").to_dict())
+            + "\n"
+        )
+
+        self.assertTrue(done_event_present(output))
+
+    def test_false_without_done_event(self) -> None:
+        output = json.dumps(
+            ErrorEvent(phase=Phase.FUNASR, reason="失败").to_dict()
+        )
+
+        self.assertFalse(done_event_present(output))
+        self.assertFalse(done_event_present(""))
 
 
 class LastErrorEventTests(unittest.TestCase):

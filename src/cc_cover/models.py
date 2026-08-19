@@ -32,6 +32,7 @@ class EventKind(str, Enum):
     RUN_DIR = "run_dir"
     DONE = "done"
     ERROR = "error"
+    CANDIDATE_FAILED = "candidate_failed"
 
 
 @dataclass(frozen=True)
@@ -142,7 +143,47 @@ class ErrorEvent:
         )
 
 
-Event = EngineStartEvent | ProgressEvent | RunDirEvent | DoneEvent | ErrorEvent
+@dataclass(frozen=True)
+class CandidateFailedEvent:
+    """对应候选处理失败但跳过继续（不中止整批）时 pipeline.py 打印的记录行。
+
+    跟 ErrorEvent 的区别：ErrorEvent 是单次终止性错误，中止整个进程；
+    CandidateFailedEvent 只标记一个候选被跳过，进程会继续处理下一个候选。
+    """
+
+    phase: Phase
+    reason: str
+    video_path: str
+    sample_id: str
+    kind: EventKind = field(default=EventKind.CANDIDATE_FAILED, init=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "event": self.kind.value,
+            "phase": self.phase.value,
+            "reason": self.reason,
+            "video_path": self.video_path,
+            "sample_id": self.sample_id,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "CandidateFailedEvent":
+        return cls(
+            phase=Phase(str(value["phase"])),
+            reason=str(value["reason"]),
+            video_path=str(value["video_path"]),
+            sample_id=str(value["sample_id"]),
+        )
+
+
+Event = (
+    EngineStartEvent
+    | ProgressEvent
+    | RunDirEvent
+    | DoneEvent
+    | ErrorEvent
+    | CandidateFailedEvent
+)
 """共享的事件 schema，生产者 pipeline.py（#67）/cli.py（#68），消费者 progress.py（#69）。"""
 
 _EVENT_DECODERS: Mapping[str, Any] = {
@@ -151,6 +192,7 @@ _EVENT_DECODERS: Mapping[str, Any] = {
     EventKind.RUN_DIR.value: RunDirEvent.from_dict,
     EventKind.DONE.value: DoneEvent.from_dict,
     EventKind.ERROR.value: ErrorEvent.from_dict,
+    EventKind.CANDIDATE_FAILED.value: CandidateFailedEvent.from_dict,
 }
 
 
