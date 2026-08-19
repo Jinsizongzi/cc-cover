@@ -10,13 +10,9 @@ from unittest import mock
 
 from cc_cover.core.discovery import discover
 from cc_cover.core.models import PipelineOptions
-from cc_cover.core.pipeline import (
-    PipelineError,
-    SubtitlePipeline,
-    options_to_dict,
-    write_bytes_atomic,
-    write_json_atomic,
-)
+from cc_cover.core.pipeline import PipelineError, SubtitlePipeline
+from cc_cover.core.pipeline.io import write_bytes_atomic, write_json_atomic
+from cc_cover.core.pipeline.options import options_to_dict
 
 
 CAPTION = "00:00\r\n你好世界\r\n\r\n00:02\r\nPyTorch 2.5\r\n".encode("utf-8")
@@ -106,7 +102,7 @@ class CommitRollbackTests(unittest.TestCase):
             )
             target_a, target_b = targets
             with mock.patch(
-                "cc_cover.core.pipeline.write_bytes_atomic",
+                "cc_cover.core.pipeline.run.write_bytes_atomic",
                 side_effect=_fail_write_on(target_b),
             ):
                 with self.assertRaises(OSError) as caught:
@@ -127,7 +123,7 @@ class CommitRollbackTests(unittest.TestCase):
             target_a, target_b = targets
             self.assertFalse(target_a.exists())
             with mock.patch(
-                "cc_cover.core.pipeline.write_bytes_atomic",
+                "cc_cover.core.pipeline.run.write_bytes_atomic",
                 side_effect=_fail_write_on(target_b),
             ):
                 with self.assertRaises(OSError):
@@ -168,7 +164,7 @@ class CommitRollbackTests(unittest.TestCase):
             )
             target_a, target_b, target_c = targets
             with mock.patch(
-                "cc_cover.core.pipeline.write_bytes_atomic",
+                "cc_cover.core.pipeline.run.write_bytes_atomic",
                 side_effect=_fail_write_on(target_c),
             ):
                 with self.assertRaises(OSError):

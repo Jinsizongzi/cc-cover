@@ -10,12 +10,12 @@ from cc_cover.core.models import PipelineOptions, Segment
 from cc_cover.core.pipeline import (
     PipelineError,
     SubtitlePipeline,
-    build_summary_text,
-    options_to_dict,
     run_status_label,
-    write_json_atomic,
     write_summary,
 )
+from cc_cover.core.pipeline.io import write_json_atomic
+from cc_cover.core.pipeline.options import options_to_dict
+from cc_cover.core.pipeline.summary import build_summary_text
 
 
 def committed_run_fixture(root: Path) -> Path:

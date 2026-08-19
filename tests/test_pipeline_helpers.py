@@ -24,19 +24,11 @@ from cc_cover.core.models import (
     ProgressEvent,
     Segment,
 )
-from cc_cover.core.pipeline import (
-    PipelineError,
-    SubtitlePipeline,
-    emit_event,
-    engine_phase,
-    extract_filename_hotwords,
-    load_hotwords,
-    load_json,
-    options_from_dict,
-    options_to_dict,
-    validate_segments,
-    write_bytes_atomic,
-)
+from cc_cover.core.pipeline import PipelineError, SubtitlePipeline, emit_event
+from cc_cover.core.pipeline.hotwords import extract_filename_hotwords, load_hotwords
+from cc_cover.core.pipeline.io import load_json, write_bytes_atomic
+from cc_cover.core.pipeline.options import options_from_dict, options_to_dict
+from cc_cover.core.pipeline.validate import engine_phase, validate_segments
 
 
 def hotwords_options(hotwords_file: Path | None = None) -> PipelineOptions:

@@ -14,12 +14,13 @@ class ProjectContractTests(unittest.TestCase):
 
     def test_user_facing_files_have_no_default_scan_path(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
+        core_root = project_root / "src" / "cc_cover" / "core"
         files = [
             project_root / "README.md",
             project_root / "src" / "cc_cover" / "gui" / "app.py",
-            project_root / "src" / "cc_cover" / "core" / "cli.py",
-            project_root / "src" / "cc_cover" / "core" / "models.py",
-            project_root / "src" / "cc_cover" / "core" / "pipeline.py",
+            core_root / "cli.py",
+            core_root / "models.py",
+            *sorted((core_root / "pipeline").glob("*.py")),
         ]
         drive_path = re.compile(r"[A-Za-z]:\\")
         obsolete_fragment = "-" + "app" + "ly"

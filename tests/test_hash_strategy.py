@@ -18,12 +18,9 @@ from cc_cover.core.discovery import (
     sha256_file,
 )
 from cc_cover.core.models import Phase, PipelineOptions, Segment
-from cc_cover.core.pipeline import (
-    PipelineError,
-    SubtitlePipeline,
-    options_to_dict,
-    validate_candidates,
-)
+from cc_cover.core.pipeline import PipelineError, SubtitlePipeline
+from cc_cover.core.pipeline.options import options_to_dict
+from cc_cover.core.pipeline.validate import validate_candidates
 
 
 CAPTION_PAYLOAD = "00:00\r\n你好世界\r\n\r\n00:02\r\nPyTorch 2.5\r\n".encode("utf-8")
@@ -207,7 +204,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
             faster_engine.transcribe.return_value = ([Segment(0, 1000, "你好")], {})
             with (
                 mock.patch(
-                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                    "cc_cover.core.pipeline.run.extract_audio", return_value=1.0
                 ),
                 mock.patch(
                     "cc_cover.core.discovery.sha256_file", wraps=sha256_file
@@ -238,7 +235,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
             output = StringIO()
             with (
                 mock.patch(
-                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                    "cc_cover.core.pipeline.run.extract_audio", return_value=1.0
                 ),
                 redirect_stdout(output),
             ):
@@ -294,7 +291,7 @@ class PipelineHashStrategyTests(unittest.TestCase):
 
             funasr_engine = mock.Mock()
             faster_engine = mock.Mock()
-            with mock.patch("cc_cover.core.pipeline.extract_audio") as extract:
+            with mock.patch("cc_cover.core.pipeline.run.extract_audio") as extract:
                 pipeline.run_candidates(
                     [sample_id],
                     {"funasr": funasr_engine, "faster_whisper": faster_engine},
@@ -384,15 +381,15 @@ class PipelineHashStrategyTests(unittest.TestCase):
                     "cc_cover.core.discovery.sha256_file", wraps=sha256_file
                 ) as hasher,
                 mock.patch(
-                    "cc_cover.core.pipeline.FunASREngine",
+                    "cc_cover.core.pipeline.run.FunASREngine",
                     return_value=funasr_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    "cc_cover.core.pipeline.run.FasterWhisperEngine",
                     return_value=faster_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.extract_audio", return_value=3.0
+                    "cc_cover.core.pipeline.run.extract_audio", return_value=3.0
                 ),
             ):
                 report = discover([root], hash_videos=True)

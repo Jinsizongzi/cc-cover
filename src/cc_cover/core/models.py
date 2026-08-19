@@ -334,3 +334,7 @@ class PipelineOptions:
     hotwords_file: Path | None = None
     hash_videos: bool = True
     pilot_count: int = 2
+
+
+ENGINE_NAMES = ("funasr", "faster_whisper")
+"""本系统支持的两个转写引擎标识；core.pipeline.validate 与 core.pipeline.run 共用。"""

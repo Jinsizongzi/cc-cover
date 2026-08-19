@@ -8,15 +8,11 @@ from unittest import mock
 
 from cc_cover.core.discovery import discover
 from cc_cover.core.engines import EngineError
-from cc_cover.core.models import Candidate, Phase, Segment
-from cc_cover.core.pipeline import (
-    PipelineError,
-    PipelineOptions,
-    SubtitlePipeline,
-    build_summary_text,
-    options_to_dict,
-    write_json_atomic,
-)
+from cc_cover.core.models import Candidate, Phase, PipelineOptions, Segment
+from cc_cover.core.pipeline import PipelineError, SubtitlePipeline
+from cc_cover.core.pipeline.io import write_json_atomic
+from cc_cover.core.pipeline.options import options_to_dict
+from cc_cover.core.pipeline.summary import build_summary_text
 
 
 SEGMENTS = [
@@ -104,15 +100,15 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
             with (
                 mock.patch(
-                    "cc_cover.core.pipeline.FunASREngine",
+                    "cc_cover.core.pipeline.run.FunASREngine",
                     return_value=funasr_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    "cc_cover.core.pipeline.run.FasterWhisperEngine",
                     return_value=faster_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.extract_audio",
+                    "cc_cover.core.pipeline.run.extract_audio",
                     side_effect=failing_extract,
                 ),
             ):
@@ -175,15 +171,15 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
             with (
                 mock.patch(
-                    "cc_cover.core.pipeline.FunASREngine",
+                    "cc_cover.core.pipeline.run.FunASREngine",
                     return_value=funasr_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    "cc_cover.core.pipeline.run.FasterWhisperEngine",
                     return_value=faster_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                    "cc_cover.core.pipeline.run.extract_audio", return_value=1.0
                 ),
             ):
                 engines = pipeline._load_engines_if_needed(
@@ -247,15 +243,15 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
             with (
                 mock.patch(
-                    "cc_cover.core.pipeline.FunASREngine",
+                    "cc_cover.core.pipeline.run.FunASREngine",
                     return_value=funasr_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    "cc_cover.core.pipeline.run.FasterWhisperEngine",
                     return_value=faster_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                    "cc_cover.core.pipeline.run.extract_audio", return_value=1.0
                 ),
             ):
                 pipeline.execute()
@@ -274,15 +270,15 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
             with (
                 mock.patch(
-                    "cc_cover.core.pipeline.FunASREngine",
+                    "cc_cover.core.pipeline.run.FunASREngine",
                     return_value=funasr_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    "cc_cover.core.pipeline.run.FasterWhisperEngine",
                     return_value=faster_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                    "cc_cover.core.pipeline.run.extract_audio", return_value=1.0
                 ),
             ):
                 with self.assertRaises(RuntimeError):
@@ -319,15 +315,15 @@ class CandidateSkipAndContinueTests(unittest.TestCase):
             faster_engine.transcribe.return_value = (list(SEGMENTS), {})
             with (
                 mock.patch(
-                    "cc_cover.core.pipeline.FunASREngine",
+                    "cc_cover.core.pipeline.run.FunASREngine",
                     return_value=funasr_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.FasterWhisperEngine",
+                    "cc_cover.core.pipeline.run.FasterWhisperEngine",
                     return_value=faster_engine,
                 ),
                 mock.patch(
-                    "cc_cover.core.pipeline.extract_audio", return_value=1.0
+                    "cc_cover.core.pipeline.run.extract_audio", return_value=1.0
                 ) as extract,
             ):
                 engines = pipeline._load_engines_if_needed(

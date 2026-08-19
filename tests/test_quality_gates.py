@@ -9,7 +9,9 @@ from pathlib import Path
 from cc_cover.core.discovery import discover
 from cc_cover.core.formats import render_segments
 from cc_cover.core.models import Candidate, Fingerprint, PipelineOptions, Segment
-from cc_cover.core.pipeline import SubtitlePipeline, options_to_dict, write_json_atomic
+from cc_cover.core.pipeline import SubtitlePipeline
+from cc_cover.core.pipeline.io import write_json_atomic
+from cc_cover.core.pipeline.options import options_to_dict
 
 
 def make_candidate(root: Path) -> Candidate:

@@ -1,18 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
 import re
-import statistics
 import sys
 import time
-import unicodedata
-import uuid
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from difflib import SequenceMatcher
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -24,9 +18,9 @@ from cc_cover.core.discovery import (
     fingerprints_match_quick,
 )
 from cc_cover.core.engines import (
+    EngineError,
     FasterWhisperEngine,
     FunASREngine,
-    EngineError,
     extract_audio,
     ffmpeg_version,
     resolve_device,
@@ -41,19 +35,38 @@ from cc_cover.core.formats import (
 from cc_cover.core.models import (
     Candidate,
     CandidateFailedEvent,
-    DEFAULT_FASTER_WHISPER_MODEL,
+    ENGINE_NAMES,
     EngineStartEvent,
-    Event,
     Phase,
     PipelineOptions,
     ProgressEvent,
     ProtectedText,
     Segment,
 )
+from cc_cover.core.pipeline.audit import (
+    align_for_audit,
+    comparison_text,
+    faster_whisper_confidence,
+    longest_duplicate_run,
+)
+from cc_cover.core.pipeline.errors import PipelineError
+from cc_cover.core.pipeline.hotwords import load_hotwords
+from cc_cover.core.pipeline.io import (
+    emit_event,
+    load_json,
+    utc_now,
+    write_bytes_atomic,
+    write_json_atomic,
+)
+from cc_cover.core.pipeline.options import options_from_dict, options_to_dict
+from cc_cover.core.pipeline.summary import write_summary
+from cc_cover.core.pipeline.validate import (
+    engine_phase,
+    validate_candidates,
+    validate_protected,
+    validate_segments,
+)
 
-
-ASCII_TOKEN_PATTERN = re.compile(r"[A-Za-z]+(?:[._+#/-][A-Za-z0-9]+)*|\d+(?:\.\d+)?")
-FILENAME_HOTWORD_PATTERN = re.compile(r"[A-Za-z0-9]+")
 SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 WARNING_DENSITY_MIN = 100.0
@@ -67,21 +80,6 @@ WARNING_AVG_LOGPROB_MIN = -1.0
 WARNING_NO_SPEECH_PROB_MAX = 0.6
 
 
-class PipelineError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        phase: Phase,
-        video_path: str | None = None,
-        sample_id: str | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.phase = phase
-        self.video_path = video_path
-        self.sample_id = sample_id
-
-
 class _TerminalEngineFailure(Exception):
     """标记系统性失败：engine.transcribe() 自身抛出的异常、或引擎未加载这个
     编程错误。候选级失败（指纹校验、音频提取、字幕段校验）改为跳过当前
@@ -93,536 +91,6 @@ class _TerminalEngineFailure(Exception):
     def __init__(self, original: BaseException) -> None:
         super().__init__(str(original))
         self.original = original
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def write_bytes_atomic(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("xb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
-def write_json_atomic(path: Path, payload: Any) -> None:
-    write_bytes_atomic(
-        path,
-        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
-    )
-
-
-def emit_event(event: Event) -> None:
-    """在人读文字打印旁边无条件追加一行结构化事件；不替代、不影响原有打印。"""
-    print(json.dumps(event.to_dict(), ensure_ascii=False), flush=True)
-
-
-def load_json(path: Path, *, phase: Phase) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise PipelineError(f"缺少运行产物：{path}", phase=phase) from exc
-    except json.JSONDecodeError as exc:
-        raise PipelineError(f"运行产物 JSON 无效：{path}: {exc}", phase=phase) from exc
-    if not isinstance(value, dict):
-        raise PipelineError(f"运行产物顶层必须是对象：{path}", phase=phase)
-    return value
-
-
-SUMMARY_FILENAME = "summary.txt"
-
-RUN_STATUS_LABELS = {
-    "prepared": "已准备",
-    "running": "运行中",
-    "staged_all": "已暂存（全部候选）",
-    "staged_partial": "已暂存（部分候选）",
-    "committed": "已完成",
-    "unknown": "未知",
-}
-
-
-def run_status_label(status: str) -> str:
-    """运行状态的用户可读标签；未知状态原样透传。"""
-    return RUN_STATUS_LABELS.get(status, status)
-
-
-def load_optional_json(path: Path) -> dict[str, Any] | None:
-    """读取可选的运行产物 JSON；文件缺失或无效时返回 None。"""
-    try:
-        return load_json(path, phase=Phase.SETUP)
-    except (PipelineError, OSError):
-        return None
-
-
-def _sample_line(sample: dict[str, Any]) -> str:
-    return "{} {}".format(
-        sample.get("sample_id", ""), sample.get("video_path", "")
-    ).strip()
-
-
-def build_summary_text(run_dir: Path) -> str:
-    """从运行产物生成人读摘要文本；产物缺失时以 0 / 未知降级。"""
-    run_dir = run_dir.expanduser().resolve()
-    manifest = load_optional_json(run_dir / "manifest.json") or {}
-    stage = load_optional_json(run_dir / "stage_report.json")
-    commit = load_optional_json(run_dir / "commit_report.json")
-    verification = load_optional_json(run_dir / "verification.json")
-
-    run_id = str(manifest.get("run_id") or run_dir.name)
-    status = str(manifest.get("status") or "unknown")
-    started = manifest.get("created_at_utc")
-    ended = None
-    if commit is not None:
-        ended = commit.get("committed_at_utc")
-    if ended is None:
-        ended = manifest.get("updated_at_utc")
-    if ended is None:
-        ended = started
-
-    candidates = manifest.get("candidates") or []
-    candidate_count = len(candidates) if isinstance(candidates, list) else 0
-    excluded_videos = manifest.get("excluded_videos") or []
-    excluded_count = len(excluded_videos) if isinstance(excluded_videos, list) else 0
-    discovery = manifest.get("discovery")
-    if isinstance(discovery, dict):
-        # 已排除 = 发现视频总数 - 候选数（同 stem 冲突、显式排除项均不进入候选）。
-        video_count = int(discovery.get("video_count") or 0)
-        discovered_candidates = int(discovery.get("candidate_count") or 0)
-        if video_count and discovered_candidates:
-            excluded_count = max(0, video_count - discovered_candidates)
-
-    samples = (stage.get("samples") or []) if stage else []
-    sample_dicts = [item for item in samples if isinstance(item, dict)]
-    passed_samples = [item for item in sample_dicts if bool(item.get("passed"))]
-    failed_samples = [item for item in sample_dicts if not bool(item.get("passed"))]
-    warning_samples = [item for item in sample_dicts if item.get("warnings")]
-    warning_count = sum(int(item.get("warning_count") or 0) for item in warning_samples)
-
-    entries = (commit.get("entries") or []) if commit else []
-    committed_count = len(entries) if isinstance(entries, list) else 0
-
-    verify_failures: list[str] = []
-    if verification is not None and not bool(verification.get("passed", True)):
-        verify_failures = [str(item) for item in verification.get("failures") or []]
-
-    candidate_failures = manifest.get("candidate_failures") or []
-    candidate_failure_dicts = [
-        item for item in candidate_failures if isinstance(item, dict)
-    ]
-
-    lines = [
-        "CC-Cover 运行摘要",
-        "================",
-        "",
-        f"运行 ID：{run_id}",
-        f"状态：{run_status_label(status)}（{status}）",
-        f"开始时间：{started}",
-        f"结束时间：{ended}",
-        "",
-        "统计",
-        "----",
-        f"候选总数：{candidate_count}",
-        f"已排除：{excluded_count}（本次不处理）",
-        f"处理失败（已跳过）：{len(candidate_failure_dicts)}",
-        f"质量门禁通过：{len(passed_samples)}",
-        f"质量门禁失败：{len(failed_samples)}",
-        f"写回成功：{committed_count}",
-        f"告警：{len(warning_samples)} 个视频，共 {warning_count} 条",
-    ]
-    if verification is not None:
-        if verify_failures:
-            lines.append(f"最终复核：失败（{len(verify_failures)} 项）")
-        else:
-            lines.append(
-                f"最终复核：{int(verification.get('verified_count') or 0)} 项通过"
-            )
-
-    lines += ["", "告警明细", "--------"]
-    if warning_samples:
-        for sample in warning_samples:
-            lines.append(_sample_line(sample))
-            lines.extend(f"  - {warning}" for warning in sample.get("warnings") or [])
-    else:
-        lines.append("（无）")
-
-    lines += ["", "处理失败（已跳过）明细", "--------"]
-    if candidate_failure_dicts:
-        for failure in candidate_failure_dicts:
-            lines.append(
-                "{} {}".format(
-                    failure.get("sample_id", ""), failure.get("video_path", "")
-                ).strip()
-            )
-            lines.append(f"  - {failure.get('reason', '')}")
-    else:
-        lines.append("（无）")
-
-    lines += ["", "失败明细", "--------"]
-    failure_lines: list[str] = []
-    for sample in failed_samples:
-        failure_lines.append(_sample_line(sample))
-        failure_lines.extend(f"  - {error}" for error in sample.get("errors") or [])
-    failure_lines.extend(f"  - {failure}" for failure in verify_failures)
-    if failure_lines:
-        lines.extend(failure_lines)
-    else:
-        lines.append("（无）")
-
-    lines += ["", "写回清单", "--------"]
-    if entries:
-        for entry in entries:
-            sample_id = entry.get("sample_id", "")
-            target = entry.get("target_path", "")
-            size = entry.get("target_size", "?")
-            lines.append(f"{sample_id} {target}（{size} 字节）".strip())
-    else:
-        lines.append("（未写回）")
-
-    lines += ["", "路径", "----", f"运行目录：{run_dir}"]
-    return "\n".join(lines) + "\n"
-
-
-def write_summary(run_dir: Path) -> Path:
-    """在运行目录写入 summary.txt（UTF-8），返回其路径。"""
-    run_dir = run_dir.expanduser().resolve()
-    path = run_dir / SUMMARY_FILENAME
-    write_bytes_atomic(path, build_summary_text(run_dir).encode("utf-8"))
-    return path
-
-
-@dataclass(frozen=True)
-class CompletionStats:
-    """完成弹窗展示的运行结果统计。"""
-
-    elapsed_seconds: float | None
-    written_count: int
-    warning_count: int
-    failed_count: int = 0
-
-
-def _timestamp_epoch(value: Any) -> float | None:
-    """ISO 时间戳转 epoch 秒；缺失或不可解析时返回 None。"""
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
-
-
-def run_completion_stats(run_dir: Path) -> CompletionStats:
-    """从运行产物读取完成弹窗需要的统计：总耗时、写回数、告警数。"""
-    run_dir = run_dir.expanduser().resolve()
-    manifest = load_optional_json(run_dir / "manifest.json")
-    commit = load_optional_json(run_dir / "commit_report.json")
-    stage = load_optional_json(run_dir / "stage_report.json")
-
-    started = _timestamp_epoch(manifest.get("created_at_utc") if manifest else None)
-    ended_raw = None
-    if commit is not None:
-        ended_raw = commit.get("committed_at_utc")
-    if ended_raw is None and manifest is not None:
-        ended_raw = manifest.get("updated_at_utc")
-    ended = _timestamp_epoch(ended_raw)
-    elapsed = ended - started if started is not None and ended is not None else None
-
-    written = 0
-    if commit is not None:
-        written = int(commit.get("entry_count") or 0)
-        entries = commit.get("entries")
-        if not written and isinstance(entries, list):
-            written = len(entries)
-
-    warnings = int(stage.get("warning_count") or 0) if stage else 0
-    candidate_failures = manifest.get("candidate_failures") if manifest else None
-    failed_count = len(candidate_failures) if isinstance(candidate_failures, list) else 0
-    return CompletionStats(
-        elapsed_seconds=elapsed,
-        written_count=written,
-        warning_count=warnings,
-        failed_count=failed_count,
-    )
-
-
-def options_to_dict(options: PipelineOptions) -> dict[str, Any]:
-    return {
-        "roots": [str(path) for path in options.roots],
-        "runs_root": str(options.runs_root),
-        "model_cache": str(options.model_cache),
-        "device": options.device,
-        "compute_type": options.compute_type,
-        "ffmpeg": None if options.ffmpeg is None else str(options.ffmpeg),
-        "language": options.language,
-        "funasr_model": options.funasr_model,
-        "funasr_vad_model": options.funasr_vad_model,
-        "funasr_punc_model": options.funasr_punc_model,
-        "faster_whisper_model": options.faster_whisper_model,
-        "hotwords_file": (
-            None if options.hotwords_file is None else str(options.hotwords_file)
-        ),
-        "hash_videos": options.hash_videos,
-        "pilot_count": options.pilot_count,
-    }
-
-
-def options_from_dict(value: Mapping[str, Any]) -> PipelineOptions:
-    return PipelineOptions(
-        roots=[Path(str(path)).resolve() for path in value["roots"]],
-        runs_root=Path(str(value["runs_root"])).resolve(),
-        model_cache=Path(str(value["model_cache"])).resolve(),
-        device=str(value.get("device", "auto")),
-        compute_type=str(value.get("compute_type", "auto")),
-        ffmpeg=(
-            None
-            if value.get("ffmpeg") in (None, "")
-            else Path(str(value["ffmpeg"])).resolve()
-        ),
-        language=str(value.get("language", "zh")),
-        funasr_model=str(value.get("funasr_model", "paraformer-zh")),
-        funasr_vad_model=str(value.get("funasr_vad_model", "fsmn-vad")),
-        funasr_punc_model=str(value.get("funasr_punc_model", "ct-punc")),
-        faster_whisper_model=str(
-            value.get("faster_whisper_model", DEFAULT_FASTER_WHISPER_MODEL)
-        ),
-        hotwords_file=(
-            None
-            if value.get("hotwords_file") in (None, "")
-            else Path(str(value["hotwords_file"])).resolve()
-        ),
-        hash_videos=bool(value.get("hash_videos", True)),
-        pilot_count=int(value.get("pilot_count", 2)),
-    )
-
-
-def extract_filename_hotwords(stem: str) -> list[str]:
-    """从文件名主干提取热词：仅保留含英文字母的字母/数字 token，纯数字过滤。"""
-    return [
-        token
-        for token in FILENAME_HOTWORD_PATTERN.findall(stem)
-        if any(character.isalpha() for character in token)
-    ]
-
-
-def load_hotwords(options: PipelineOptions, candidates: Sequence[Candidate]) -> list[str]:
-    values: list[str] = []
-    if options.hotwords_file is not None:
-        if not options.hotwords_file.is_file():
-            raise PipelineError(
-                f"热词文件不存在：{options.hotwords_file}", phase=Phase.SETUP
-            )
-        for line in options.hotwords_file.read_text(encoding="utf-8-sig").splitlines():
-            text = line.strip()
-            if not text or text.startswith("#"):
-                continue
-            values.extend(part.strip() for part in text.split(",") if part.strip())
-    for candidate in candidates:
-        values.extend(extract_filename_hotwords(candidate.video_path.stem))
-    unique: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        key = value.casefold()
-        if key not in seen:
-            seen.add(key)
-            unique.append(value)
-    return unique[:200]
-
-
-def comparison_text(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text).casefold()
-    return "".join(character for character in normalized if character.isalnum())
-
-
-def token_set(text: str) -> set[str]:
-    normalized = unicodedata.normalize("NFKC", text)
-    return {item.casefold() for item in ASCII_TOKEN_PATTERN.findall(normalized)}
-
-
-def overlap_ms(left: Segment, right: Segment) -> int:
-    return max(0, min(left.end_ms, right.end_ms) - max(left.start_ms, right.start_ms))
-
-
-def align_for_audit(
-    funasr_segments: Sequence[Segment], faster_segments: Sequence[Segment]
-) -> dict[str, Any]:
-    alignments: list[dict[str, Any]] = []
-    used_funasr: set[int] = set()
-    for faster_index, faster in enumerate(faster_segments):
-        matched = [
-            (index, item)
-            for index, item in enumerate(funasr_segments)
-            if overlap_ms(item, faster) > 0
-        ]
-        used_funasr.update(index for index, _item in matched)
-        funasr_text = "".join(item.text for _index, item in matched)
-        left = comparison_text(funasr_text)
-        right = comparison_text(faster.text)
-        ratio = SequenceMatcher(None, left, right).ratio() if left and right else 0.0
-        mismatch = sorted(token_set(funasr_text).symmetric_difference(token_set(faster.text)))
-        alignments.append(
-            {
-                "faster_whisper_segment_index": faster_index,
-                "funasr_segment_indexes": [index for index, _item in matched],
-                "start_ms": faster.start_ms,
-                "end_ms": faster.end_ms,
-                "funasr_text": funasr_text,
-                "faster_whisper_text": faster.text,
-                "similarity_ratio": round(ratio, 6),
-                "ascii_or_numeric_token_mismatch": mismatch,
-                "high_risk": not matched or ratio < 0.60 or bool(mismatch),
-                "decision": "keep_funasr_writeback_review_faster_whisper_only",
-            }
-        )
-    for index, segment in enumerate(funasr_segments):
-        if index in used_funasr:
-            continue
-        alignments.append(
-            {
-                "faster_whisper_segment_index": None,
-                "funasr_segment_indexes": [index],
-                "start_ms": segment.start_ms,
-                "end_ms": segment.end_ms,
-                "funasr_text": segment.text,
-                "faster_whisper_text": "",
-                "similarity_ratio": 0.0,
-                "ascii_or_numeric_token_mismatch": sorted(token_set(segment.text)),
-                "high_risk": True,
-                "decision": "keep_funasr_writeback_missing_faster_whisper_overlap",
-            }
-        )
-    alignments.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
-    ratios = [float(item["similarity_ratio"]) for item in alignments]
-    return {
-        "writeback_source_engine": "funasr",
-        "faster_whisper_role": "second_candidate_and_conflict_audit_only",
-        "alignment_count": len(alignments),
-        "high_risk_count": sum(bool(item["high_risk"]) for item in alignments),
-        "median_similarity_ratio": statistics.median(ratios) if ratios else 0.0,
-        "alignments": alignments,
-    }
-
-
-def longest_duplicate_run(segments: Sequence[Segment]) -> int:
-    longest = 1
-    current = 1
-    previous = ""
-    for segment in segments:
-        normalized = comparison_text(segment.text)
-        if normalized and normalized == previous:
-            current += 1
-            longest = max(longest, current)
-        else:
-            current = 1
-        previous = normalized
-    return longest
-
-
-def faster_whisper_confidence(segments: Sequence[Segment]) -> dict[str, Any]:
-    avg_logprob = [
-        float(item.metadata["avg_logprob"])
-        for item in segments
-        if item.metadata.get("avg_logprob") is not None
-    ]
-    no_speech_prob = [
-        float(item.metadata["no_speech_prob"])
-        for item in segments
-        if item.metadata.get("no_speech_prob") is not None
-    ]
-    return {
-        "avg_logprob_mean": statistics.mean(avg_logprob) if avg_logprob else None,
-        "avg_logprob_min": min(avg_logprob) if avg_logprob else None,
-        "no_speech_prob_max": max(no_speech_prob) if no_speech_prob else None,
-        "checked_segments": len(segments),
-    }
-
-
-_ENGINE_NAMES = ("funasr", "faster_whisper")
-
-
-def engine_phase(engine: str | None) -> Phase:
-    """引擎标识（不论连字符还是下划线拼法）到处理阶段的映射。"""
-    normalized = (engine or "").replace("-", "_")
-    return Phase.FUNASR if normalized == "funasr" else Phase.FASTER_WHISPER
-
-
-def validate_segments(
-    segments: Sequence[Segment],
-    duration_seconds: float,
-    *,
-    engine: str | None = None,
-    sample_id: str | None = None,
-    video_path: str | None = None,
-) -> None:
-    context = (
-        f"engine={engine}, sample={sample_id}, video={video_path}, "
-        f"duration_ms={round(duration_seconds * 1000.0)}"
-    )
-    phase = engine_phase(engine)
-    if not segments:
-        raise PipelineError(
-            f"引擎字幕段为空：{context}",
-            phase=phase,
-            sample_id=sample_id,
-            video_path=video_path,
-        )
-    previous_start = -1
-    maximum_end = math.ceil(duration_seconds * 1000.0) + 5000
-    for index, segment in enumerate(segments):
-        if (
-            segment.start_ms < 0
-            or segment.end_ms <= segment.start_ms
-            or segment.start_ms < previous_start
-            or segment.end_ms > maximum_end
-            or not segment.text.strip()
-        ):
-            raise PipelineError(
-                f"引擎字幕段无效：#{index} "
-                f"({context}, start_ms={segment.start_ms}, end_ms={segment.end_ms})",
-                phase=phase,
-                sample_id=sample_id,
-                video_path=video_path,
-            )
-        previous_start = segment.start_ms
-
-
-def validate_protected(protected: Sequence[ProtectedText], *, phase: Phase) -> None:
-    failures: list[str] = []
-    for item in protected:
-        actual = fingerprint(item.path, include_hash=True)
-        if not fingerprints_match(actual, item.fingerprint):
-            failures.append(str(item.path))
-    if failures:
-        raise PipelineError(
-            "受保护的非空 TXT 发生变化：\n" + "\n".join(failures), phase=phase
-        )
-
-
-def validate_candidates(
-    candidates: Sequence[Candidate], require_initial_target: bool, *, phase: Phase
-) -> None:
-    failures: list[str] = []
-    for candidate in candidates:
-        current_video = fingerprint(candidate.video_path, include_hash=False)
-        if not fingerprints_match_quick(current_video, candidate.video_fingerprint):
-            failures.append(f"视频变化：{candidate.video_path}")
-        if require_initial_target:
-            current_target = fingerprint(candidate.target_path, include_hash=True)
-            if not fingerprints_match(current_target, candidate.target_fingerprint):
-                failures.append(f"目标 TXT 状态变化：{candidate.target_path}")
-    if failures:
-        raise PipelineError(
-            "候选快照校验失败：\n" + "\n".join(failures), phase=phase
-        )
 
 
 class SubtitlePipeline:
@@ -665,7 +133,9 @@ class SubtitlePipeline:
         pilot_count = max(0, min(options.pilot_count, len(report.candidates)))
         pilot = [item.sample_id for item in report.candidates[:pilot_count]]
         remaining = [
-            item.sample_id for item in report.candidates if item.sample_id not in set(pilot)
+            item.sample_id
+            for item in report.candidates
+            if item.sample_id not in set(pilot)
         ]
         manifest = {
             "schema_version": "1.0",
@@ -689,7 +159,9 @@ class SubtitlePipeline:
                 "all": [item.sample_id for item in report.candidates],
             },
             "candidates": [item.to_dict() for item in report.candidates],
-            "protected_nonempty_txt": [item.to_dict() for item in report.protected_texts],
+            "protected_nonempty_txt": [
+                item.to_dict() for item in report.protected_texts
+            ],
             "excluded_videos": sorted(
                 {str(path.expanduser().resolve()) for path in (excluded_videos or ())}
             ),
@@ -699,7 +171,9 @@ class SubtitlePipeline:
             "candidate_failures": [],
         }
         write_json_atomic(run_dir / "manifest.json", manifest)
-        return cls(options, run_dir, report.candidates, report.protected_texts, manifest)
+        return cls(
+            options, run_dir, report.candidates, report.protected_texts, manifest
+        )
 
     @classmethod
     def resume(cls, run_dir: Path) -> "SubtitlePipeline":
@@ -708,8 +182,7 @@ class SubtitlePipeline:
         options = options_from_dict(manifest["options"])
         candidates = [Candidate.from_dict(item) for item in manifest["candidates"]]
         protected = [
-            ProtectedText.from_dict(item)
-            for item in manifest["protected_nonempty_txt"]
+            ProtectedText.from_dict(item) for item in manifest["protected_nonempty_txt"]
         ]
         return cls(options, resolved, candidates, protected, manifest)
 
@@ -723,7 +196,9 @@ class SubtitlePipeline:
 
     def load_engine_output(self, engine: str, candidate: Candidate) -> dict[str, Any]:
         phase = engine_phase(engine)
-        payload = load_json(self.engine_output(engine, candidate.sample_id), phase=phase)
+        payload = load_json(
+            self.engine_output(engine, candidate.sample_id), phase=phase
+        )
         if payload.get("sample_id") != candidate.sample_id:
             raise PipelineError(
                 f"{engine} sample_id 不匹配",
@@ -797,18 +272,20 @@ class SubtitlePipeline:
         模型常驻范围覆盖整个批次，不逐引擎精细判断。
         """
         selected = [
-            candidate for candidate in self.candidates if candidate.sample_id in sample_ids
+            candidate
+            for candidate in self.candidates
+            if candidate.sample_id in sample_ids
         ]
         needs_any = any(
             not self.output_complete(engine_name, candidate)
-            for engine_name in _ENGINE_NAMES
+            for engine_name in ENGINE_NAMES
             for candidate in selected
         )
         if not needs_any:
             return {}
         engines: dict[str, Any] = {}
         try:
-            for engine_name in _ENGINE_NAMES:
+            for engine_name in ENGINE_NAMES:
                 print(f"加载 {engine_name}：device={self.device}", flush=True)
                 emit_event(EngineStartEvent(engine=engine_name, device=self.device))
                 engine = self._build_engine(engine_name)
@@ -835,7 +312,9 @@ class SubtitlePipeline:
         记录过失败的候选（含 resume 时从 manifest 恢复的）不会被重试。
         """
         selected = [
-            candidate for candidate in self.candidates if candidate.sample_id in sample_ids
+            candidate
+            for candidate in self.candidates
+            if candidate.sample_id in sample_ids
         ]
         pending = [
             candidate
@@ -843,7 +322,7 @@ class SubtitlePipeline:
             if candidate.sample_id not in self.candidate_failures
             and any(
                 not self.output_complete(engine_name, candidate)
-                for engine_name in _ENGINE_NAMES
+                for engine_name in ENGINE_NAMES
             )
         ]
         if not pending:
@@ -874,7 +353,7 @@ class SubtitlePipeline:
         wav_path = self.run_dir / "work" / f"{candidate.sample_id}.wav"
         duration: float | None = None
         try:
-            for engine_name in _ENGINE_NAMES:
+            for engine_name in ENGINE_NAMES:
                 if self.output_complete(engine_name, candidate):
                     continue
                 if engine_name not in engines:
@@ -975,9 +454,7 @@ class SubtitlePipeline:
             "phase": phase.value,
             "reason": reason,
         }
-        self.update_manifest(
-            candidate_failures=list(self.candidate_failures.values())
-        )
+        self.update_manifest(candidate_failures=list(self.candidate_failures.values()))
 
     def quality_report(
         self,
@@ -1002,9 +479,7 @@ class SubtitlePipeline:
             format_error = str(exc)
         else:
             format_error = None
-        funasr_text = "".join(
-            normalize_text(item.text) for item in funasr_segments
-        )
+        funasr_text = "".join(normalize_text(item.text) for item in funasr_segments)
         faster_text = "".join(item.text for item in faster_segments)
         normalized_funasr = comparison_text(funasr_text)
         normalized_faster = comparison_text(faster_text)
@@ -1045,12 +520,9 @@ class SubtitlePipeline:
         ):
             warnings.append(f"双模型全文长度比告警：{length_ratio:.3f}")
         median_chars = float(format_metrics["median_text_chars"])
-        if (
-            format_error is None
-            and (
-                median_chars < WARNING_MEDIAN_CHARS_MIN
-                or median_chars > WARNING_MEDIAN_CHARS_MAX
-            )
+        if format_error is None and (
+            median_chars < WARNING_MEDIAN_CHARS_MIN
+            or median_chars > WARNING_MEDIAN_CHARS_MAX
         ):
             warnings.append(f"中位段长偏离常见范围：{median_chars:g} 字")
         confidence = faster_whisper_confidence(faster_segments)
@@ -1194,9 +666,7 @@ class SubtitlePipeline:
                 int(item.get("warning_count", 0)) for item in merged.values()
             ),
             "warning_sample_ids": sorted(
-                sample_id
-                for sample_id, item in merged.items()
-                if item.get("warnings")
+                sample_id for sample_id, item in merged.items() if item.get("warnings")
             ),
             "has_warnings": any(item.get("warnings") for item in merged.values()),
             "samples": [merged[sample_id] for sample_id in sorted(merged)],
@@ -1212,7 +682,8 @@ class SubtitlePipeline:
         )
         if not selected_passed:
             raise PipelineError(
-                "候选未全部就绪或未通过质量门禁，未写回课程目录", phase=Phase.QUALITY_GATE
+                "候选未全部就绪或未通过质量门禁，未写回课程目录",
+                phase=Phase.QUALITY_GATE,
             )
         return stage_report
 
@@ -1222,9 +693,7 @@ class SubtitlePipeline:
         )
         if not stage_report.get("staged_all") or not stage_report.get("all_passed"):
             raise PipelineError("全部字幕尚未通过质量门禁", phase=Phase.WRITEBACK)
-        reports = {
-            str(item["sample_id"]): item for item in stage_report["samples"]
-        }
+        reports = {str(item["sample_id"]): item for item in stage_report["samples"]}
         validate_protected(self.protected, phase=Phase.WRITEBACK)
         # 候选级失败（跳过继续）的候选从未进入 stage_report，写回时排除，不
         # 强求它们凑齐——写回只覆盖真正处理完、通过质量门禁的那部分候选。
@@ -1248,7 +717,11 @@ class SubtitlePipeline:
                 )
             payloads[candidate.sample_id] = payload
             backup_dir = backups / candidate.sample_id
-            original = candidate.target_path.read_bytes() if candidate.target_path.exists() else b""
+            original = (
+                candidate.target_path.read_bytes()
+                if candidate.target_path.exists()
+                else b""
+            )
             write_bytes_atomic(backup_dir / "original.txt", original)
             write_json_atomic(
                 backup_dir / "state.json",
@@ -1334,7 +807,10 @@ class SubtitlePipeline:
                 failures.append(f"视频变化：{candidate.video_path}")
                 continue
             prepared = self.run_dir / "prepared" / f"{candidate.sample_id}.txt"
-            if not candidate.target_path.is_file() or candidate.target_path.stat().st_size == 0:
+            if (
+                not candidate.target_path.is_file()
+                or candidate.target_path.stat().st_size == 0
+            ):
                 failures.append(f"目标字幕为空：{candidate.target_path}")
                 continue
             actual = candidate.target_path.read_bytes()
