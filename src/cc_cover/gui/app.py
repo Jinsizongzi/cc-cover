@@ -76,10 +76,6 @@ from cc_cover.gui.win_native import (
 )
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-PRIMARY = "#3157d5"
-PRIMARY_DARK = "#2445b3"
-SUCCESS = "#17803d"
-WARNING = "#b54708"
 
 
 class CCCoverApp(ttk.Frame):

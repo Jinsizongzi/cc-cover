@@ -9,6 +9,6 @@
 ## Consequences
 
 - **依赖方向**：`layout.py` 依赖 `cc_cover.gui.content`（`FEATURE_TEXT`/`GUIDE_TEXT`）；不依赖、也不能依赖 `cc_cover.gui.app`。
-- **随迁移的常量**：`BACKGROUND`/`PANEL`/`INK`/`MUTED`/`ERROR` 这 5 个颜色常量随控件搭建代码一起搬进 `layout.py`（原来只被这 7 个方法引用）；`app.py` 里另外 4 个颜色常量（`PRIMARY`/`PRIMARY_DARK`/`SUCCESS`/`WARNING`）在本次迁移前就已经没有任何引用点，属于既有的死代码，不在这次候选范围内，原样保留未动。
+- **随迁移的常量**：`BACKGROUND`/`PANEL`/`INK`/`MUTED`/`ERROR` 这 5 个颜色常量随控件搭建代码一起搬进 `layout.py`（原来只被这 7 个方法引用）；`app.py` 里另外 4 个颜色常量（`PRIMARY`/`PRIMARY_DARK`/`SUCCESS`/`WARNING`）在本次迁移前就已经没有任何引用点，属于既有的死代码，本不在这次候选范围内——确认过全仓库也没有别处 import 它们后，作为紧接着的一次单独清理一并删除。
 - **测试**：不新增测试——这个候选本身不改变任何控件的搭建结果，`tests/test_gui_smoke.py` 的既有冒烟测试原样覆盖。
 - **来源**：本次决策产出于架构评审第三轮（候选③，评级 Worth exploring）。
