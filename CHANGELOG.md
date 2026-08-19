@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-19
+
+### 变更
+
+- 转写流程由"先跑完一轮 FunASR 再跑一轮 faster-whisper"改为逐候选交替处理两个引擎（一个候选紧接着跑完两个引擎，再处理下一个候选），从根源修复进度条"第 N 个"计数在单引擎整轮跑完前不动的问题，同时减少模型重复加载开销（#109）。
+- 候选处理失败（视频指纹校验、音频提取、字幕段校验）不再中止整批：记录后跳过，继续处理剩余候选；写回只覆盖真正处理完并通过质量门禁的那部分候选，CLI 退出码在有候选失败时仍为非零。失败候选清单在完成弹窗与运行摘要（summary.txt）里单独列出，跟质量门禁失败区分开（#104）。
+
 ## [0.6.0] - 2026-08-18
 
 ### 新增
@@ -77,7 +84,8 @@
 - 安全双模型字幕恢复：FunASR 负责中文正文与句级时间戳，faster-whisper 负责对照与冲突审计。
 - 通过质量与格式校验后原子写回目标 TXT，写回前备份，失败时回滚。
 
-[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.3.1...v0.4.0

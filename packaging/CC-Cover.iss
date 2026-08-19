@@ -7,12 +7,12 @@
 ; 构建：
 ;   iscc.exe packaging\CC-Cover.iss
 ; 或从 CI 传入版本号（覆盖默认值）：
-;   iscc.exe /DMyAppVersion=0.6.0 packaging\CC-Cover.iss
+;   iscc.exe /DMyAppVersion=0.7.0 packaging\CC-Cover.iss
 ;
 ; 源目录约定：CC-Cover.iss 位于 packaging\ 下，onedir 产物位于 dist\CC-Cover\。
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.6.0"
+  #define MyAppVersion "0.7.0"
 #endif
 #define MyAppName "CC-Cover"
 #define MyAppExeName "CC-Cover.exe"
