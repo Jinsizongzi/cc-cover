@@ -7,7 +7,6 @@ import queue
 import subprocess
 import tempfile
 import threading
-import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -44,13 +43,9 @@ from cc_cover.gui.dialogs import DialogHost, enrich_failure
 from cc_cover.gui.environment import EnvironmentController
 from cc_cover.gui.human_readable import format_size, strip_ansi_escapes
 from cc_cover.gui.progress import (
-    InstallProgressTracker,
-    ProgressTracker,
+    ProgressPresenter,
     failure_info_from_command,
     failure_info_from_run,
-    install_progress_text,
-    parse_event_line,
-    progress_text,
     run_dir_from_events,
     stopped_message,
 )
@@ -117,10 +112,7 @@ class CCCoverApp(ttk.Frame):
         self.environment_status = tk.StringVar(value="检查中")
         self.summary = tk.StringVar(value="尚未选择扫描目录")
         self.progress_var = tk.StringVar(value="")
-        self._progress_tracker: ProgressTracker | None = None
-        self._session_started_at: float | None = None
         self.cache_size_var = tk.StringVar(value="检查中")
-        self._install_tracker: InstallProgressTracker | None = None
         self._save_after_id: str | None = None
         self._applying_device_value = False
         self._device_recheck_after_id: str | None = None
@@ -158,6 +150,7 @@ class CCCoverApp(ttk.Frame):
             current_device=self.device.get,
             hf_token=self._hf_token_value,
         )
+        self.progress_presenter = ProgressPresenter(self.progress, self.progress_var)
 
         for variable in (
             self.scan_path,
@@ -658,11 +651,9 @@ class CCCoverApp(ttk.Frame):
             widget.configure(state=state)
         self.cancel_button.configure(state="normal" if busy else "disabled")
         if busy:
-            self.progress.configure(mode="indeterminate")
-            self.progress.start(10)
+            self.progress_presenter.start_busy()
         else:
-            self.progress.stop()
-            self._clear_progress()
+            self.progress_presenter.stop_busy()
         if status is not None:
             self.status.set(status)
 
@@ -1120,91 +1111,12 @@ class CCCoverApp(ttk.Frame):
             return False
         return confirmed
 
-    def _start_progress(self, total: int) -> None:
-        self._session_started_at = time.monotonic()
-        self._progress_tracker = ProgressTracker(
-            total=total, started_at=self._session_started_at
-        )
-        self.progress.configure(mode="determinate", maximum=100, value=0)
-        self.progress.stop()
-        self._refresh_progress()
-        self.after(500, self._schedule_progress_refresh)
-
-    def _schedule_progress_refresh(self) -> None:
-        if self._progress_tracker is None:
-            return
-        self._refresh_progress()
-        self.after(500, self._schedule_progress_refresh)
-
-    def _refresh_progress(self) -> None:
-        tracker = self._progress_tracker
-        if tracker is None:
-            return
-        snapshot = tracker.snapshot()
-        self.progress.configure(value=snapshot.percent)
-        self.progress_var.set(progress_text(snapshot))
-
-    def _on_progress_line(self, line: str) -> None:
-        if self._install_tracker is not None:
-            self._install_tracker.on_output(line)
-            self._refresh_install_progress()
-            return
-        if self._progress_tracker is None:
-            return
-        self._progress_tracker.on_event(parse_event_line(line))
-        self._refresh_progress()
-
-    def _clear_progress(self) -> None:
-        if self._progress_tracker is None and self._install_tracker is None:
-            return
-        self._progress_tracker = None
-        self._session_started_at = None
-        self._install_tracker = None
-        self.progress_var.set("")
-        self.progress.configure(mode="indeterminate", value=0)
-
-    def _start_install_progress(self, total_bytes: int, component_count: int) -> None:
-        self._install_tracker = InstallProgressTracker(
-            total_bytes=total_bytes,
-            component_count=component_count,
-            started_at=time.monotonic(),
-        )
-        self.progress.configure(mode="determinate", maximum=100, value=0)
-        self.progress.stop()
-        self._refresh_install_progress()
-        self.after(500, self._schedule_install_progress_refresh)
-
-    def _on_install_component(self, index: int, count: int) -> None:
-        if self._install_tracker is not None:
-            self._install_tracker.on_component(index)
-            self._refresh_install_progress()
-
-    def _schedule_install_progress_refresh(self) -> None:
-        if self._install_tracker is None:
-            return
-        self._refresh_install_progress()
-        self.after(500, self._schedule_install_progress_refresh)
-
-    def _refresh_install_progress(self) -> None:
-        tracker = self._install_tracker
-        if tracker is None:
-            return
-        snapshot = tracker.snapshot()
-        self.progress.configure(value=snapshot.percent)
-        self.progress_var.set(install_progress_text(snapshot))
-
-    def _session_elapsed(self) -> float | None:
-        """本次运行会话的已耗时（进度开始到结束），用于完成提示音的判断。"""
-        if self._session_started_at is None:
-            return None
-        return time.monotonic() - self._session_started_at
-
     def _handle_worker_outcome(self, outcome: WorkerOutcome) -> None:
         match outcome:
             case IdleOutcome(status=status):
                 self._set_busy(False, status)
             case DoneOutcome(title=title, message=message, run_dir=run_dir):
-                session_elapsed = self._session_elapsed()
+                session_elapsed = self.progress_presenter.elapsed()
                 self._set_busy(False, "就绪")
                 if run_dir is not None:
                     stats = run_completion_stats(run_dir)
@@ -1232,15 +1144,15 @@ class CCCoverApp(ttk.Frame):
                 event, payload = item
                 if event == "log":
                     self._append_log(str(payload))
-                    self._on_progress_line(str(payload))
+                    self.progress_presenter.on_line(str(payload))
                 elif event == "progress_start":
-                    self._start_progress(int(payload))
+                    self.progress_presenter.start(int(payload))
                 elif event == "install_start":
                     total_bytes, component_count = payload
-                    self._start_install_progress(total_bytes, component_count)
+                    self.progress_presenter.start_install(total_bytes, component_count)
                 elif event == "install_component":
                     index, count = payload
-                    self._on_install_component(index, count)
+                    self.progress_presenter.on_install_component(index, count)
                 elif event == "confirm_start":
                     candidate_count, excluded_count, result_queue = payload
                     self.dialogs.show_confirm_start_dialog(
