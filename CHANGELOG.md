@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 工程
+
+- `src/cc_cover/` 由 17 个模块平铺一层目录，重整为 `core/`（无 tkinter 依赖的字幕补全引擎）与 `gui/`（Tkinter 界面）两个子包；`core/pipeline.py`（1426 行）按职责拆成 8 个文件；`gui.py` 的 `CCCoverApp`（90 方法）拆成组合根，加 `CandidateListPanel`/`DialogHost`/`TaskRunner` 三个协作对象；`commands.py` 剩余的"杂物袋"部分拆成 `commands`/`environment`/`device` 三个模块。本次改动均为内部重构，不改变任何用户可见行为，全量测试套件（446 用例）验证，详见 `docs/adr/0002-split-core-and-gui-packages.md`。
+
 ## [0.7.1] - 2026-08-19
 
 ### 变更
