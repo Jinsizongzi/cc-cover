@@ -184,7 +184,7 @@ def needs_force_reinstall_prompt(outdated: set[str]) -> bool:
 def setup_commands(
     paths: RuntimePaths,
     base_python: Sequence[str],
-    accelerator: str,
+    device: str,
     outdated: set[str] | None = None,
 ) -> list[list[str]]:
     """构造安装/修复命令。
@@ -193,11 +193,11 @@ def setup_commands(
     完全一致）；传入非 None 的包名集合时，只重装集合里的包——torch 配对的
     卸载+强制重装步骤只在 torch/torchaudio 至少一个落后时才会加入。
     """
-    if accelerator not in {"cuda", "cpu"}:
-        raise ValueError(f"不支持的加速器：{accelerator}")
+    if device not in {"cuda", "cpu"}:
+        raise ValueError(f"不支持的设备：{device}")
     torch_index = (
         "https://download.pytorch.org/whl/cu121"
-        if accelerator == "cuda"
+        if device == "cuda"
         else "https://download.pytorch.org/whl/cpu"
     )
     commands: list[list[str]] = []
@@ -255,10 +255,10 @@ def setup_commands(
     return commands
 
 
-def environment_check_command(paths: RuntimePaths, accelerator: str = "cpu") -> list[str]:
-    if accelerator not in {"cuda", "cpu"}:
-        raise ValueError(f"不支持的加速器：{accelerator}")
-    require_cuda = "True" if accelerator == "cuda" else "False"
+def environment_check_command(paths: RuntimePaths, device: str = "cpu") -> list[str]:
+    if device not in {"cuda", "cpu"}:
+        raise ValueError(f"不支持的设备：{device}")
+    require_cuda = "True" if device == "cuda" else "False"
     return [
         str(paths.venv_python),
         "-c",
@@ -377,9 +377,9 @@ def parsed_nvidia_probe(output: str) -> str | None:
 
 
 def environment_status_label(
-    accelerator: str, _check_output: str = "", *, outdated: bool = False
+    device: str, _check_output: str = "", *, outdated: bool = False
 ) -> str:
-    base = "运行环境已就绪（GPU）" if accelerator == "cuda" else "运行环境已就绪（CPU）"
+    base = "运行环境已就绪（GPU）" if device == "cuda" else "运行环境已就绪（CPU）"
     return f"{base}（有更新可用）" if outdated else base
 
 
