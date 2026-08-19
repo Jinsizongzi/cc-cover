@@ -446,7 +446,7 @@ class QualityGateStageTests(unittest.TestCase):
                     "segments": [item.to_dict() for item in engine_segments],
                 },
             )
-        stage_report = pipeline.stage([candidate.sample_id])
+        pipeline.stage([candidate.sample_id])
         audit = json.loads(
             (run_dir / "audit" / f"{candidate.sample_id}.json").read_text(
                 encoding="utf-8"
