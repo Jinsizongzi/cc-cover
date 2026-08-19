@@ -6,11 +6,11 @@ import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Callable
+from typing import Any, Callable
 
-from cc_cover.core.pipeline import CompletionStats, SUMMARY_FILENAME
+from cc_cover.core.pipeline import CompletionStats, SUMMARY_FILENAME, run_status_label
 from cc_cover.gui.candidate_list import confirmation_text
-from cc_cover.gui.human_readable import format_duration
+from cc_cover.gui.human_readable import format_duration, format_size
 from cc_cover.gui.progress import (
     FailureInfo,
     error_text,
@@ -18,9 +18,17 @@ from cc_cover.gui.progress import (
     run_is_resumable,
     stopped_message,
 )
-from cc_cover.gui.storage import DiskCheck, disk_precheck_text
+from cc_cover.gui.storage import (
+    CLEANUP_WARNING_BYTES,
+    DiskCheck,
+    delete_runs,
+    disk_precheck_text,
+    list_runs,
+    runs_total_size,
+)
 
 PANEL = "#ffffff"
+WARNING = "#b54708"
 
 
 def enrich_failure(info: FailureInfo) -> FailureInfo:
@@ -357,3 +365,136 @@ class DialogHost:
         ttk.Button(
             actions, text="完成", style="Action.TButton", command=dialog.destroy
         ).pack(side="right")
+
+    def show_cleanup_dialog(self) -> None:
+        """运行目录清理：勾选要删的运行目录，弹窗内容脱离 CCCoverApp 单独构造。"""
+        runs = list_runs(self.runs_root)
+        dialog = self.result_dialog("运行目录清理")
+        body = ttk.Frame(dialog, style="Panel.TFrame", padding=(18, 14, 18, 6))
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body,
+            text="勾选要删除的运行目录（本软件不会自动删除）：",
+            style="Section.TLabel",
+        ).pack(anchor="w", pady=(0, 8))
+        columns = ("check", "run_id", "time", "status", "size")
+        tree = ttk.Treeview(body, columns=columns, show="headings", height=12)
+        for column, text, width, stretch in (
+            ("check", "", 36, False),
+            ("run_id", "运行 ID", 190, False),
+            ("time", "时间", 150, False),
+            ("status", "状态", 150, False),
+            ("size", "大小", 80, False),
+        ):
+            tree.heading(column, text=text)
+            tree.column(
+                column,
+                width=width,
+                stretch=stretch,
+                anchor="center" if column == "check" else "w",
+            )
+        scrollbar = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="left", fill="y")
+
+        by_iid: dict[str, Any] = {}
+        for run in runs:
+            iid = tree.insert(
+                "",
+                "end",
+                values=(
+                    "☐",
+                    run.run_id,
+                    run.created_at_utc or "（无记录）",
+                    run_status_label(run.status),
+                    format_size(run.size_bytes),
+                ),
+                tags=("unchecked",),
+            )
+            by_iid[iid] = run
+
+        def update_delete_button() -> None:
+            selected = [
+                iid
+                for iid in tree.get_children()
+                if "checked" in tree.item(iid, "tags")
+            ]
+            delete_button.configure(state="normal" if selected else "disabled")
+
+        def toggle_row(_event: Any) -> None:
+            iid = tree.identify_row(_event.y)
+            if not iid:
+                return
+            values = list(tree.item(iid, "values"))
+            checked = values[0] == "☑"
+            values[0] = "☐" if checked else "☑"
+            tree.item(
+                iid,
+                values=values,
+                tags=("checked" if not checked else "unchecked",),
+            )
+            update_delete_button()
+
+        def confirm_delete() -> None:
+            selected = [
+                by_iid[iid]
+                for iid in tree.get_children()
+                if "checked" in tree.item(iid, "tags")
+            ]
+            if not selected:
+                return
+            total = format_size(sum(run.size_bytes for run in selected))
+            confirmed = messagebox.askyesno(
+                "确认删除",
+                f"将永久删除 {len(selected)} 个运行目录（共 {total}），不可恢复。\n\n"
+                "确定继续吗？",
+                parent=dialog,
+            )
+            if not confirmed:
+                return
+            try:
+                deleted = delete_runs(selected)
+            except OSError as exc:
+                messagebox.showerror(
+                    "删除失败",
+                    f"部分运行目录删除失败：\n{exc}",
+                    parent=dialog,
+                )
+                return
+            messagebox.showinfo(
+                "删除完成", f"已删除 {deleted} 个运行目录。", parent=dialog
+            )
+            dialog.destroy()
+
+        tree.bind("<Button-1>", toggle_row)
+
+        footer = ttk.Frame(dialog, style="Panel.TFrame", padding=(18, 10, 18, 18))
+        footer.pack(fill="x")
+        total_size = runs_total_size(runs)
+        ttk.Label(
+            footer,
+            text=f"总占用：{format_size(total_size)}",
+            style="Body.TLabel",
+        ).pack(side="left")
+        if total_size > CLEANUP_WARNING_BYTES:
+            ttk.Label(
+                footer,
+                text="⚠ 已超过 5GB，建议清理旧运行目录",
+                style="Body.TLabel",
+                foreground=WARNING,
+            ).pack(side="left", padx=(12, 0))
+        delete_button = ttk.Button(
+            footer,
+            text="删除所选",
+            style="Action.TButton",
+            command=confirm_delete,
+            state="disabled",
+        )
+        delete_button.pack(side="right")
+        ttk.Button(
+            footer,
+            text="关闭",
+            style="Action.TButton",
+            command=dialog.destroy,
+        ).pack(side="right", padx=(0, 8))

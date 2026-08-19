@@ -17,7 +17,7 @@ except ImportError:  # ubuntu CI 通常未安装 python3-tk
 from cc_cover.core.pipeline import CompletionStats
 from cc_cover.gui.dialogs import DialogHost, enrich_failure
 from cc_cover.gui.progress import FailureInfo
-from cc_cover.gui.storage import DiskCheck
+from cc_cover.gui.storage import DiskCheck, RunInfo
 
 
 def _run_dir_with_failed_sample(root: Path, *, video: str, errors: list[str]) -> Path:
@@ -135,6 +135,15 @@ class DialogHostTests(unittest.TestCase):
             labels.update(self._button_labels(child))
         return labels
 
+    def _find_treeview(self, widget: tk.Misc) -> ttk.Treeview | None:
+        for child in widget.winfo_children():
+            if isinstance(child, ttk.Treeview):
+                return child
+            found = self._find_treeview(child)
+            if found is not None:
+                return found
+        return None
+
     def test_result_dialog_sets_title_and_is_transient(self) -> None:
         dialog = self.host.result_dialog("测试标题")
         try:
@@ -235,6 +244,75 @@ class DialogHostTests(unittest.TestCase):
         finally:
             if dialog.winfo_exists():
                 dialog.destroy()
+
+    def test_cleanup_dialog_delete_button_starts_disabled(self) -> None:
+        run = RunInfo(
+            run_id="run1", path=Path("C:/runs/run1"), status="done", size_bytes=1
+        )
+        with mock.patch("cc_cover.gui.dialogs.list_runs", return_value=[run]):
+            self.host.show_cleanup_dialog()
+        dialog = self.root.winfo_children()[-1]
+        try:
+            button = self._button_labels(dialog)["删除所选"]
+            self.assertEqual(str(button.cget("state")), "disabled")
+        finally:
+            dialog.destroy()
+
+    def test_cleanup_dialog_deletes_checked_run(self) -> None:
+        run = RunInfo(
+            run_id="run1", path=Path("C:/runs/run1"), status="done", size_bytes=2048
+        )
+        with (
+            mock.patch("cc_cover.gui.dialogs.list_runs", return_value=[run]),
+            mock.patch(
+                "cc_cover.gui.dialogs.delete_runs", return_value=1
+            ) as delete_runs_mock,
+            mock.patch("cc_cover.gui.dialogs.messagebox.askyesno", return_value=True),
+            mock.patch("cc_cover.gui.dialogs.messagebox.showinfo"),
+        ):
+            self.host.show_cleanup_dialog()
+            dialog = self.root.winfo_children()[-1]
+            try:
+                tree = self._find_treeview(dialog)
+                assert tree is not None
+                iid = tree.get_children()[0]
+                tree.item(iid, tags=("checked",))
+                button = self._button_labels(dialog)["删除所选"]
+                button.configure(state="normal")
+                button.invoke()
+            finally:
+                if dialog.winfo_exists():
+                    dialog.destroy()
+
+        delete_runs_mock.assert_called_once_with([run])
+
+    def test_cleanup_dialog_does_nothing_when_declined(self) -> None:
+        run = RunInfo(
+            run_id="run1", path=Path("C:/runs/run1"), status="done", size_bytes=2048
+        )
+        with (
+            mock.patch("cc_cover.gui.dialogs.list_runs", return_value=[run]),
+            mock.patch("cc_cover.gui.dialogs.delete_runs") as delete_runs_mock,
+            mock.patch(
+                "cc_cover.gui.dialogs.messagebox.askyesno", return_value=False
+            ),
+        ):
+            self.host.show_cleanup_dialog()
+            dialog = self.root.winfo_children()[-1]
+            try:
+                tree = self._find_treeview(dialog)
+                assert tree is not None
+                iid = tree.get_children()[0]
+                tree.item(iid, tags=("checked",))
+                button = self._button_labels(dialog)["删除所选"]
+                button.configure(state="normal")
+                button.invoke()
+                self.assertTrue(dialog.winfo_exists())
+            finally:
+                if dialog.winfo_exists():
+                    dialog.destroy()
+
+        delete_runs_mock.assert_not_called()
 
 
 if __name__ == "__main__":
