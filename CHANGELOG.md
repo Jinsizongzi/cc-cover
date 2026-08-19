@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 工程
+
+- `CCCoverApp` 组合根（ADR-0002 拆完后仍有 1749 行）继续瘦身到 902 行：环境/设备检查与安装逻辑拆成 `EnvironmentController`（`gui/environment.py`）；进度条与忙碌转圈状态拆成 `ProgressPresenter`（`gui/progress.py`）；运行目录清理对话框归拢进 `DialogHost`，消除唯一一处绕开 `DialogHost` 自建对话框的地方；窗口与控件搭建代码（约 350 行、无分支逻辑）拆成 `gui/layout.py` 里的模块级函数。本次改动均为内部重构，不改变任何用户可见行为，全量测试套件（476 用例）验证，详见 `docs/adr/0003-extract-environment-controller-from-cccoverapp.md`、`docs/adr/0004-extract-progress-presenter-from-cccoverapp.md`、`docs/adr/0005-extract-window-layout-from-cccoverapp.md`。
+
 ## [0.7.2] - 2026-08-19
 
 ### 工程
