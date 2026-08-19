@@ -4,10 +4,16 @@
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-19
+
 ### 变更
 
 - faster-whisper 默认模型由 `large-v3-turbo` 换成完整版 `large-v3`：当前硬件下转写耗时仍远快于实时，换完整版让双模型交叉校验（质量门禁）更可信。
 - 热词列表上限由 120 条提升到 200 条；`hotwords`/`initial_prompt` 两个参数不再互斥回退，当前安装的 faster-whisper 版本支持 `hotwords` 时，`initial_prompt` 也一并传入，不再被跳过。
+
+### 工程
+
+- 合并 `GuiOptions` 进 `GuiSettings`，消掉一个冗余的重复类型（#110）；本次改动均为内部重构，不改变任何用户可见行为。
 
 ## [0.7.0] - 2026-08-19
 
@@ -89,7 +95,8 @@
 - 安全双模型字幕恢复：FunASR 负责中文正文与句级时间戳，faster-whisper 负责对照与冲突审计。
 - 通过质量与格式校验后原子写回目标 TXT，写回前备份，失败时回滚。
 
-[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Jinsizongzi/cc-cover/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Jinsizongzi/cc-cover/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Jinsizongzi/cc-cover/compare/v0.4.0...v0.5.0
