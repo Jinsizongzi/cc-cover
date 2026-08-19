@@ -6,14 +6,14 @@ Windows 桌面应用（Tkinter GUI + CLI），用 FunASR 与 faster-whisper 给�
 
 **Candidate**：
 一个待补全字幕的视频——同名 TXT 缺失或为空，discovery 阶段识别出来、pipeline 阶段处理它。
-_Avoid_: Sample（`pipeline.py` 目前大量用这个词指同一个东西，是历史遗留，未来应统一成 Candidate）
+_Avoid_: Sample——历史遗留只剩 `sample_id` 这一个字段名（Candidate 的标识符），代码里不存在独立的 `Sample` 类型，不构成概念混淆。这个字段名还写死在每次运行落盘的 JSON 里（`manifest.json`/`stage_report.json`/引擎输出/`commit_report.json`），改名要为所有历史运行目录的 resume 兼容性买单，换来的只是命名上的美观，评估后判定不值得做。
 
 **Run**：
 一次流水线执行，处理一批 Candidate，产物落在一个带 `manifest.json` 的运行目录下。
 _Avoid_: Task
 
 **Options**：
-一次 Run 的配置——设备、模型、语言、pilot 数量等。当前代码里有三种独立类型表达同一个概念（`PipelineOptions`/`GuiOptions`/`GuiSettings`），未来应该收敛成一个。
+一次 Run 的配置——设备、模型、语言、pilot 数量等。`PipelineOptions`（流水线实际用的完整配置）和 `GuiSettings`（GUI 持久化的用户偏好）是两个刻意分开的类型：`PipelineOptions` 里 `language`/`funasr_model`/`funasr_vad_model`/`funasr_punc_model`/`faster_whisper_model`/`hotwords_file`/`pilot_count` 这几个字段，GUI 目前完全没有对应的设置项，硬收成一个类型只会让 `GuiSettings` 背上一堆用户碰不到的字段。原本还有第三个类型 `GuiOptions`（`GuiSettings` 的严格子集，只为构造 CLI 子进程参数而存在），已经并入 `GuiSettings`。
 _Avoid_: Config、Settings 单独指代同一件事（这两个词目前分别绑定在配置文件和 `GuiSettings` 上，容易和 Options 混）
 
 **Protected Text**：
