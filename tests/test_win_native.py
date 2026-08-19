@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -62,7 +63,17 @@ class SingleInstanceLockTests(unittest.TestCase):
                 child.terminate()
                 child.wait(timeout=10)
                 child.stdout.close()
-            self.assertTrue(SingleInstanceLock(root).acquire())
+            # wait() 确认子进程已退出，不代表内核已经同步清理完它持有的
+            # 全部句柄（含命名互斥体）——这两者之间有真实但短暂的时序
+            # 窗口，轮询代替单次断言，避免在这个窗口内偶发失败。
+            deadline = time.monotonic() + 2.0
+            acquired = False
+            while time.monotonic() < deadline:
+                if SingleInstanceLock(root).acquire():
+                    acquired = True
+                    break
+                time.sleep(0.05)
+            self.assertTrue(acquired)
 
     def test_focus_existing_window_never_raises(self) -> None:
         self.assertIsInstance(focus_existing_window(), bool)
