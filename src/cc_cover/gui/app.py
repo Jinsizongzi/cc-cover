@@ -9,10 +9,9 @@ import tempfile
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
-from cc_cover import __version__
 from cc_cover.core.pipeline import (
     PipelineError,
     load_optional_json,
@@ -30,7 +29,6 @@ from cc_cover.gui.background import (
 )
 from cc_cover.gui.candidate_list import CandidateListPanel, scan_confirmation_stats
 from cc_cover.gui.commands import resume_command, scan_command, transcribe_command
-from cc_cover.gui.content import FEATURE_TEXT, GUIDE_TEXT
 from cc_cover.gui.data_root import (
     RuntimePaths,
     apply_data_root,
@@ -42,6 +40,7 @@ from cc_cover.gui.data_root import (
 from cc_cover.gui.dialogs import DialogHost, enrich_failure
 from cc_cover.gui.environment import EnvironmentController
 from cc_cover.gui.human_readable import format_size, strip_ansi_escapes
+from cc_cover.gui.layout import build_interface, configure_styles, configure_window
 from cc_cover.gui.progress import (
     ProgressPresenter,
     failure_info_from_command,
@@ -77,15 +76,10 @@ from cc_cover.gui.win_native import (
 )
 
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-BACKGROUND = "#f5f7fb"
-PANEL = "#ffffff"
-INK = "#172033"
-MUTED = "#667085"
 PRIMARY = "#3157d5"
 PRIMARY_DARK = "#2445b3"
 SUCCESS = "#17803d"
 WARNING = "#b54708"
-ERROR = "#b42318"
 
 
 class CCCoverApp(ttk.Frame):
@@ -117,9 +111,9 @@ class CCCoverApp(ttk.Frame):
         self._applying_device_value = False
         self._device_recheck_after_id: str | None = None
 
-        self._configure_window()
-        self._configure_styles()
-        self._build_interface()
+        configure_window(self)
+        configure_styles(self)
+        build_interface(self)
 
         self.candidates = CandidateListPanel(
             self.candidate_tree, self.select_all_var, on_change=self._refresh_summary
@@ -180,377 +174,6 @@ class CCCoverApp(ttk.Frame):
                 ),
             )
             return GuiSettings()
-
-    def _configure_window(self) -> None:
-        self.master.title(f"CC-Cover {__version__} · 双模型字幕补全")
-        self.master.geometry("1080x760")
-        self.master.minsize(920, 650)
-        self.master.configure(background=BACKGROUND)
-        self.pack(fill="both", expand=True)
-
-    def _configure_styles(self) -> None:
-        style = ttk.Style(self.master)
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
-        style.configure("App.TFrame", background=BACKGROUND)
-        style.configure("Panel.TFrame", background=PANEL)
-        style.configure(
-            "Title.TLabel",
-            background=BACKGROUND,
-            foreground=INK,
-            font=("Microsoft YaHei UI", 20, "bold"),
-        )
-        style.configure(
-            "Subtitle.TLabel",
-            background=BACKGROUND,
-            foreground=MUTED,
-            font=("Microsoft YaHei UI", 10),
-        )
-        style.configure(
-            "Section.TLabel",
-            background=PANEL,
-            foreground=INK,
-            font=("Microsoft YaHei UI", 11, "bold"),
-        )
-        style.configure(
-            "Body.TLabel",
-            background=PANEL,
-            foreground=MUTED,
-            font=("Microsoft YaHei UI", 9),
-        )
-        style.configure(
-            "Primary.TButton",
-            font=("Microsoft YaHei UI", 10, "bold"),
-            padding=(18, 9),
-        )
-        style.configure("Action.TButton", padding=(12, 7))
-        style.configure("Treeview", rowheight=28, font=("Microsoft YaHei UI", 9))
-        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold"))
-
-    def _build_interface(self) -> None:
-        header = ttk.Frame(self, style="App.TFrame", padding=(28, 22, 28, 12))
-        header.pack(fill="x")
-        title_row = ttk.Frame(header, style="App.TFrame")
-        title_row.pack(fill="x")
-        ttk.Label(title_row, text="CC-Cover", style="Title.TLabel").pack(side="left")
-        ttk.Label(
-            title_row,
-            text=f"  v{__version__}",
-            style="Subtitle.TLabel",
-        ).pack(side="left", pady=(8, 0))
-        ttk.Label(
-            header,
-            text="选择目录后，自动扫描、双模型识别、格式校验并替换空字幕 TXT",
-            style="Subtitle.TLabel",
-        ).pack(anchor="w", pady=(4, 0))
-
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill="both", expand=True, padx=24, pady=(0, 18))
-
-        self.work_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=4)
-        self.feature_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=12)
-        self.guide_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=12)
-        self.log_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=12)
-        self.notebook.add(self.work_tab, text="  字幕补全  ")
-        self.notebook.add(self.feature_tab, text="  功能说明  ")
-        self.notebook.add(self.guide_tab, text="  操作指南  ")
-        self.notebook.add(self.log_tab, text="  运行日志  ")
-
-        self._build_work_tab()
-        self._build_text_tab(self.feature_tab, FEATURE_TEXT)
-        self._build_text_tab(self.guide_tab, GUIDE_TEXT)
-        self._build_log_tab()
-
-    def _panel(
-        self, parent: ttk.Frame, padding: tuple[int, int] = (18, 14)
-    ) -> ttk.Frame:
-        panel = ttk.Frame(parent, style="Panel.TFrame", padding=padding)
-        panel.pack(fill="x", pady=(0, 10))
-        return panel
-
-    def _build_work_tab(self) -> None:
-        environment_panel = self._panel(self.work_tab)
-        environment_panel.columnconfigure(1, weight=1)
-        ttk.Label(environment_panel, text="运行环境", style="Section.TLabel").grid(
-            row=0, column=0, sticky="w"
-        )
-        self.environment_label = ttk.Label(
-            environment_panel,
-            textvariable=self.environment_status,
-            style="Body.TLabel",
-        )
-        self.environment_label.grid(row=0, column=1, sticky="w", padx=(14, 0))
-        device_box = ttk.Frame(environment_panel, style="Panel.TFrame")
-        device_box.grid(row=0, column=2, padx=(12, 8))
-        ttk.Label(device_box, text="运行设备：", style="Body.TLabel").pack(side="left")
-        self.device_gpu_radio = ttk.Radiobutton(
-            device_box,
-            text="NVIDIA GPU",
-            variable=self.device,
-            value="cuda",
-        )
-        self.device_gpu_radio.pack(side="left", padx=(6, 0))
-        self.device_cpu_radio = ttk.Radiobutton(
-            device_box,
-            text="CPU",
-            variable=self.device,
-            value="cpu",
-        )
-        self.device_cpu_radio.pack(side="left", padx=(8, 0))
-        self.setup_button = ttk.Button(
-            environment_panel,
-            text="安装 / 修复运行环境",
-            style="Action.TButton",
-            command=self.setup_environment,
-        )
-        self.setup_button.grid(row=0, column=3, sticky="e")
-        self.data_root_path = tk.StringVar(value=str(self.paths.data_root))
-        ttk.Label(environment_panel, text="数据目录：", style="Body.TLabel").grid(
-            row=1, column=0, sticky="w", pady=(8, 0)
-        )
-        ttk.Label(
-            environment_panel,
-            textvariable=self.data_root_path,
-            style="Body.TLabel",
-            wraplength=380,
-            justify="left",
-        ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(14, 0), pady=(8, 0))
-        self.data_root_button = ttk.Button(
-            environment_panel,
-            text="更改…",
-            command=self.change_data_root,
-        )
-        self.data_root_button.grid(row=1, column=3, sticky="e", pady=(8, 0))
-        ttk.Label(environment_panel, text="模型缓存：", style="Body.TLabel").grid(
-            row=2, column=0, sticky="w", pady=(8, 0)
-        )
-        ttk.Label(
-            environment_panel,
-            textvariable=self.cache_size_var,
-            style="Body.TLabel",
-        ).grid(row=2, column=1, sticky="w", padx=(14, 0), pady=(8, 0))
-        self.open_cache_button = ttk.Button(
-            environment_panel,
-            text="打开缓存位置",
-            style="Action.TButton",
-            command=self.open_model_cache,
-        )
-        self.open_cache_button.grid(row=2, column=2, padx=(12, 8), pady=(8, 0))
-        self.clear_cache_button = ttk.Button(
-            environment_panel,
-            text="清理模型缓存",
-            style="Action.TButton",
-            command=self.clear_model_cache,
-        )
-        self.clear_cache_button.grid(row=2, column=3, sticky="e", pady=(8, 0))
-        self.clear_all_data_button = ttk.Button(
-            environment_panel,
-            text="清理全部本地数据",
-            command=self.clear_all_data,
-        )
-        self.clear_all_data_button.grid(row=3, column=3, sticky="e", pady=(8, 0))
-        ttk.Label(
-            environment_panel, text="HF Token（可选）：", style="Body.TLabel"
-        ).grid(row=4, column=0, sticky="w", pady=(8, 0))
-        self.hf_token_entry = ttk.Entry(
-            environment_panel, textvariable=self.hf_token, show="*"
-        )
-        self.hf_token_entry.grid(
-            row=4, column=1, columnspan=2, sticky="ew", padx=(14, 0), pady=(8, 0)
-        )
-
-        path_panel = self._panel(self.work_tab)
-        path_panel.columnconfigure(0, weight=1)
-        ttk.Label(path_panel, text="扫描目录", style="Section.TLabel").grid(
-            row=0, column=0, sticky="w", columnspan=3
-        )
-        self.path_entry = ttk.Entry(path_panel, textvariable=self.scan_path)
-        self.path_entry.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        self.choose_button = ttk.Button(
-            path_panel,
-            text="选择文件夹",
-            style="Action.TButton",
-            command=self.choose_directory,
-        )
-        self.choose_button.grid(row=1, column=1, padx=(10, 0), pady=(10, 0))
-        self.scan_button = ttk.Button(
-            path_panel,
-            text="重新扫描",
-            style="Action.TButton",
-            command=self.scan_directory,
-        )
-        self.scan_button.grid(row=1, column=2, padx=(8, 0), pady=(10, 0))
-
-        options_panel = self._panel(self.work_tab)
-        ttk.Label(options_panel, text="处理选项", style="Section.TLabel").pack(
-            anchor="w"
-        )
-        options_row = ttk.Frame(options_panel, style="Panel.TFrame")
-        options_row.pack(fill="x", pady=(10, 0))
-        self.hash_check = ttk.Checkbutton(
-            options_row, text="视频哈希保护", variable=self.hash_videos
-        )
-        self.hash_check.pack(side="left")
-
-        ffmpeg_row = ttk.Frame(options_panel, style="Panel.TFrame")
-        ffmpeg_row.pack(fill="x", pady=(10, 0))
-        ttk.Label(ffmpeg_row, text="FFmpeg（通常留空）：", style="Body.TLabel").pack(
-            side="left"
-        )
-        self.ffmpeg_entry = ttk.Entry(ffmpeg_row, textvariable=self.ffmpeg)
-        self.ffmpeg_entry.pack(side="left", fill="x", expand=True, padx=(8, 8))
-        self.ffmpeg_button = ttk.Button(
-            ffmpeg_row,
-            text="选择文件",
-            command=self.choose_ffmpeg,
-        )
-        self.ffmpeg_button.pack(side="left")
-
-        candidate_panel = ttk.Frame(
-            self.work_tab, style="Panel.TFrame", padding=(18, 14)
-        )
-        candidate_panel.pack(fill="both", expand=True, pady=(0, 10))
-        candidate_panel.columnconfigure(0, weight=1)
-        candidate_panel.rowconfigure(2, weight=1)
-        ttk.Label(candidate_panel, text="扫描结果", style="Section.TLabel").grid(
-            row=0, column=0, sticky="w"
-        )
-        selection_row = ttk.Frame(candidate_panel, style="Panel.TFrame")
-        selection_row.grid(row=1, column=0, sticky="ew", pady=(4, 8))
-        ttk.Label(selection_row, textvariable=self.summary, style="Body.TLabel").pack(
-            side="left"
-        )
-        self.select_all_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            selection_row,
-            text="全选",
-            variable=self.select_all_var,
-            command=lambda: self.candidates.toggle_all(),
-        ).pack(side="right")
-        columns = (
-            "state",
-            "video",
-            "target",
-            "duration",
-            "size",
-            "estimate",
-            "format",
-        )
-        self.candidate_tree = ttk.Treeview(
-            candidate_panel, columns=columns, show="tree headings", height=8
-        )
-        self.candidate_tree.heading("#0", text="")
-        self.candidate_tree.column(
-            "#0", width=36, minwidth=30, stretch=False, anchor="center"
-        )
-        self.candidate_tree.heading("state", text="状态")
-        self.candidate_tree.heading("video", text="视频")
-        self.candidate_tree.heading("target", text="目标 TXT")
-        self.candidate_tree.heading("duration", text="时长")
-        self.candidate_tree.heading("size", text="大小")
-        self.candidate_tree.heading("estimate", text="粗估处理时间")
-        self.candidate_tree.heading("format", text="输出格式")
-        self.candidate_tree.column("state", width=95, stretch=False)
-        self.candidate_tree.column("video", width=200)
-        self.candidate_tree.column("target", width=200)
-        self.candidate_tree.column("duration", width=70, stretch=False)
-        self.candidate_tree.column("size", width=80, stretch=False)
-        self.candidate_tree.column("estimate", width=100, stretch=False)
-        self.candidate_tree.column("format", width=100, stretch=False)
-        self.candidate_tree.tag_configure("excluded", foreground=MUTED)
-        self.candidate_tree.tag_configure("conflict", foreground=ERROR)
-        scrollbar = ttk.Scrollbar(
-            candidate_panel, orient="vertical", command=self.candidate_tree.yview
-        )
-        self.candidate_tree.configure(yscrollcommand=scrollbar.set)
-        self.candidate_tree.grid(row=2, column=0, sticky="nsew")
-        scrollbar.grid(row=2, column=1, sticky="ns")
-
-        action_panel = ttk.Frame(self.work_tab, style="App.TFrame")
-        action_panel.pack(fill="x", pady=(0, 2), before=candidate_panel)
-        self.start_button = ttk.Button(
-            action_panel,
-            text="开始补全并替换",
-            style="Primary.TButton",
-            command=self.start_transcription,
-        )
-        self.start_button.pack(side="left")
-        self.resume_button = ttk.Button(
-            action_panel,
-            text="继续中断任务",
-            style="Action.TButton",
-            command=self.resume_run,
-        )
-        self.resume_button.pack(side="left", padx=(10, 0))
-        self.open_runs_button = ttk.Button(
-            action_panel,
-            text="打开运行目录",
-            style="Action.TButton",
-            command=self.open_runs_directory,
-        )
-        self.open_runs_button.pack(side="left", padx=(8, 0))
-        self.cleanup_runs_button = ttk.Button(
-            action_panel,
-            text="运行目录清理",
-            style="Action.TButton",
-            command=self.cleanup_runs,
-        )
-        self.cleanup_runs_button.pack(side="left", padx=(8, 0))
-        self.cancel_button = ttk.Button(
-            action_panel,
-            text="停止当前任务",
-            style="Action.TButton",
-            command=self.cancel_task,
-            state="disabled",
-        )
-        self.cancel_button.pack(side="left", padx=(8, 0))
-        ttk.Label(action_panel, textvariable=self.status, style="Subtitle.TLabel").pack(
-            side="right"
-        )
-        progress_row = ttk.Frame(self.work_tab, style="App.TFrame")
-        progress_row.pack(fill="x", pady=(0, 2), before=candidate_panel)
-        self.progress = ttk.Progressbar(progress_row, mode="indeterminate", length=260)
-        self.progress.pack(side="left", padx=(0, 10))
-        ttk.Label(
-            progress_row,
-            textvariable=self.progress_var,
-            style="Subtitle.TLabel",
-        ).pack(side="left")
-
-    def _build_text_tab(self, parent: ttk.Frame, content: str) -> None:
-        text = scrolledtext.ScrolledText(
-            parent,
-            wrap="word",
-            relief="flat",
-            borderwidth=0,
-            background=PANEL,
-            foreground=INK,
-            font=("Microsoft YaHei UI", 10),
-            padx=22,
-            pady=20,
-            spacing1=3,
-            spacing3=7,
-        )
-        text.pack(fill="both", expand=True)
-        text.insert("1.0", content)
-        text.configure(state="disabled")
-
-    def _build_log_tab(self) -> None:
-        toolbar = ttk.Frame(self.log_tab, style="App.TFrame")
-        toolbar.pack(fill="x", pady=(0, 8))
-        ttk.Button(toolbar, text="清空日志", command=self.clear_log).pack(side="right")
-        self.log_text = scrolledtext.ScrolledText(
-            self.log_tab,
-            wrap="word",
-            background="#101828",
-            foreground="#e4e7ec",
-            insertbackground="#ffffff",
-            font=("Consolas", 9),
-            padx=12,
-            pady=12,
-        )
-        self.log_text.pack(fill="both", expand=True)
-        self.log_text.configure(state="disabled")
 
     def _current_settings(self) -> GuiSettings:
         return GuiSettings(
