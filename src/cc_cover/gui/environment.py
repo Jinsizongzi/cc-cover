@@ -1,14 +1,37 @@
 from __future__ import annotations
 
+import queue
 import re
 import shutil
-from typing import Mapping, Sequence
+import subprocess
+from typing import Any, Callable, Mapping, Sequence
 
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
+from cc_cover.gui.background import (
+    CancelledOutcome,
+    DoneOutcome,
+    ErrorOutcome,
+    IdleOutcome,
+    TaskCancelled,
+    run_in_background,
+)
 from cc_cover.gui.data_root import RuntimePaths
+from cc_cover.gui.device import device_probe_commands, parsed_device, parsed_nvidia_probe
+from cc_cover.gui.dialogs import DialogHost
+from cc_cover.gui.progress import failure_info_from_command
+from cc_cover.gui.storage import (
+    disk_precheck,
+    estimate_install_required_bytes,
+    install_download_bytes,
+    list_runs,
+    runs_total_size,
+)
+from cc_cover.gui.tasks import TaskRunner
+
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 TORCH_VERSION = "2.5.1"
 ASR_DEPENDENCIES = (
@@ -224,3 +247,284 @@ def environment_status_label(
 
 NOT_INSTALLED_STATUS_LABEL = "尚未安装（已有装好的环境？点右侧“更改…”指定位置）"
 """数据根换过目录后最常见的困惑——旧环境其实还在，只是没指过去。"""
+
+
+class EnvironmentController:
+    """环境/设备检查与安装的共用外壳。
+
+    只造还没执行的 worker 闭包，不负责起线程或切换 busy 状态——那是
+    CCCoverApp._start_worker/_set_busy 的地盘，调用方拿到闭包后自己派发到
+    线程；测试时可以直接同步调用闭包，不用起真线程。is_device_auto/
+    current_device/hf_token 三个读取器指向 CCCoverApp 持有的 Tk 变量/状态，
+    这里只读不改。
+    """
+
+    def __init__(
+        self,
+        paths: RuntimePaths,
+        events: "queue.Queue[Any]",
+        tasks: TaskRunner,
+        dialogs: DialogHost,
+        *,
+        is_device_auto: Callable[[], bool],
+        current_device: Callable[[], str],
+        hf_token: Callable[[], str],
+    ) -> None:
+        self.paths = paths
+        self.events = events
+        self.tasks = tasks
+        self.dialogs = dialogs
+        self.is_device_auto = is_device_auto
+        self.current_device = current_device
+        self.hf_token = hf_token
+        self._prompt_recheck = False
+
+    def request_recheck_prompt(self) -> None:
+        self._prompt_recheck = True
+
+    def clear_recheck_prompt(self) -> None:
+        self._prompt_recheck = False
+
+    def _outdated_packages_for(self, device: str) -> tuple[str, set[str]]:
+        """跑一次环境检查命令，返回 (原始输出, 已过期的包名集合)。
+
+        check()/setup() 都需要这两样——check() 用输出做状态上报，setup() 用
+        过期集合决定精简重装范围，字面相同的调用只写一份。
+        """
+        output = self.tasks.run_capture(
+            environment_check_command(self.paths, device), hf_token=self.hf_token()
+        )
+        return output, outdated_packages(parse_installed_versions(output))
+
+    def _detect_and_report(self) -> None:
+        if not self.is_device_auto():
+            return
+        detected: str | None = None
+        for command in device_probe_commands(self.paths):
+            try:
+                output = self.tasks.run_capture(command, hf_token=self.hf_token())
+            except Exception:
+                continue
+            detected = parsed_device(output) or parsed_nvidia_probe(output)
+            if detected is not None:
+                break
+        self.events.put(("device_detected", detected or "cpu"))
+
+    def _find_base_python(self) -> list[str]:
+        for candidate in python_candidates():
+            completed = subprocess.run(
+                [
+                    *candidate,
+                    "-c",
+                    (
+                        "import sys; "
+                        "raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 13) else 1)"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                creationflags=CREATE_NO_WINDOW,
+                check=False,
+            )
+            if completed.returncode == 0:
+                return candidate
+        raise RuntimeError(
+            "未找到 Python 3.10、3.11 或 3.12。请先安装 Python，并勾选 Add Python to PATH。"
+        )
+
+    def _confirm_force_reinstall(self) -> bool:
+        """版本比对全部匹配、没有可精简重装的目标时，询问是否强制完整重装。
+
+        用于版本号没变但文件本身损坏（磁盘错误、杀软误隔离等）这类版本比对
+        查不出来的场景——给用户一个手动逃生舱，而不是让"安装 / 修复运行环境"
+        在这种情况下悄悄变成什么都不做。任务已停止时视为取消，跟
+        CCCoverApp._confirm_start 保持同一种语义（两处传参形状不同，没有抽
+        共用工具，见 ADR-0003）。
+        """
+        result_queue: queue.Queue[bool] = queue.Queue()
+        self.events.put(("confirm_force_reinstall", result_queue))
+        confirmed = result_queue.get()
+        if self.tasks.cancel_requested:
+            return False
+        return confirmed
+
+    def build_check_worker(self) -> Callable[[], None]:
+        def worker() -> None:
+            device = "auto"
+
+            def run() -> None:
+                nonlocal device
+                if not self.paths.venv_python.is_file():
+                    self.events.put(
+                        ("environment", (False, NOT_INSTALLED_STATUS_LABEL))
+                    )
+                    self.events.put(IdleOutcome("请先安装运行环境"))
+                    self._detect_and_report()
+                    return
+                device = self.current_device()
+                output, outdated = self._outdated_packages_for(device)
+                self.clear_recheck_prompt()
+                self.events.put(
+                    (
+                        "environment",
+                        (
+                            True,
+                            environment_status_label(
+                                device, output, outdated=bool(outdated)
+                            ),
+                        ),
+                    )
+                )
+                self.events.put(("log", output + "\n"))
+                self._detect_and_report()
+                self.events.put(IdleOutcome("就绪"))
+
+            def on_cancel(exc: TaskCancelled) -> None:
+                self.events.put(
+                    CancelledOutcome(
+                        info=failure_info_from_command(
+                            [], exc, fallback_stage="环境检查"
+                        )
+                    )
+                )
+
+            def on_error(exc: Exception) -> None:
+                # 环境未就绪是预期内状态，不当作任务失败：不生成 ErrorOutcome、
+                # 不弹错误对话框，只更新状态后照常落回 idle，跟成功路径一致。
+                # device 复用 run() 读到的值（而不是再读一次 current_device()），
+                # 避免 device_detected 事件恰好在两次读取之间被主线程处理、
+                # 导致这里选错提示文案（不受 _set_busy 的按钮禁用保护）。
+                detail = str(exc).strip() or "需要安装或修复"
+                label = "GPU 环境未就绪" if device == "cuda" else "需要安装或修复"
+                self.events.put(("environment", (False, label)))
+                self.events.put(("log", f"环境检查失败：{detail}\n"))
+                self._detect_and_report()
+                if self._prompt_recheck:
+                    self.clear_recheck_prompt()
+                    self.events.put(("device_check_failed", label))
+                self.events.put(IdleOutcome("就绪"))
+
+            run_in_background(run, on_cancel=on_cancel, on_error=on_error)
+
+        return worker
+
+    def precheck_setup(self) -> bool:
+        """磁盘预检，不够时通过 dialogs 弹窗确认；在主线程同步执行。
+
+        必须在 build_setup_worker() 返回的闭包开始跑之前调用——这一步要弹
+        原生对话框，只有主线程、还没起后台线程时才安全。返回 False 时不应
+        该再调用 build_setup_worker()。
+        """
+        try:
+            required = estimate_install_required_bytes(self.current_device())
+            check = disk_precheck(self.paths.data_root, required)
+            runs_bytes = runs_total_size(list_runs(self.paths.runs_root))
+        except OSError as exc:
+            self.dialogs.show_disk_precheck_error(str(exc))
+            return False
+        if check.sufficient:
+            return True
+        return self.dialogs.confirm_low_disk_space(check, runs_bytes)
+
+    def build_setup_worker(self) -> Callable[[], None]:
+        def worker() -> None:
+            chunks: list[str] = []
+
+            def run() -> None:
+                self.paths.data_root.mkdir(parents=True, exist_ok=True)
+                base_python = self._find_base_python()
+                device = self.current_device()
+                outdated: set[str] | None = None
+                if self.paths.venv_python.is_file():
+                    try:
+                        _, outdated = self._outdated_packages_for(device)
+                    except TaskCancelled:
+                        raise
+                    except Exception:
+                        # 环境本身有问题（比如 CUDA 不可用），走全量重装最保险，
+                        # 不尝试用一次失败的检查结果算精简重装范围。TaskCancelled
+                        # 不在此列——用户主动停止要照常走 on_cancel，不能被这里
+                        # 当成"环境检查失败"吞掉、退化成继续跑完整安装。
+                        outdated = None
+                    else:
+                        if (
+                            needs_force_reinstall_prompt(outdated)
+                            and self._confirm_force_reinstall()
+                        ):
+                            outdated = None
+                commands = setup_commands(
+                    self.paths, base_python, device, outdated=outdated
+                )
+                include_torch, include_asr = reinstall_scope(outdated)
+                self.events.put(("log", "开始安装运行环境。此过程可能需要较长时间。\n"))
+                if device == "cuda" and include_torch:
+                    self.events.put(
+                        (
+                            "log",
+                            "将强制重装 GPU 版 PyTorch，以便覆盖已安装的 CPU 包。\n",
+                        )
+                    )
+                self.events.put(
+                    (
+                        "install_start",
+                        (
+                            install_download_bytes(
+                                device,
+                                include_torch=include_torch,
+                                include_asr=include_asr,
+                            ),
+                            len(commands),
+                        ),
+                    )
+                )
+                for index, command in enumerate(commands, start=1):
+                    self.events.put(
+                        ("status", f"正在安装组件 {index}/{len(commands)}…")
+                    )
+                    self.events.put(("install_component", (index, len(commands))))
+                    chunks.append(
+                        self.tasks.run_streaming(command, hf_token=self.hf_token())
+                    )
+                output = self.tasks.run_capture(
+                    environment_check_command(self.paths, device),
+                    hf_token=self.hf_token(),
+                )
+                chunks.append(output)
+                self.events.put(("log", output + "\n"))
+                self.events.put(
+                    (
+                        "environment",
+                        (True, environment_status_label(device, output)),
+                    )
+                )
+                self._detect_and_report()
+                self.events.put(
+                    DoneOutcome(
+                        title="安装完成",
+                        message="运行环境安装并检查通过，可以开始扫描视频。",
+                        run_dir=None,
+                    )
+                )
+
+            def on_cancel(exc: TaskCancelled) -> None:
+                self.events.put(
+                    CancelledOutcome(
+                        info=failure_info_from_command(
+                            chunks, exc, fallback_stage="安装运行环境"
+                        )
+                    )
+                )
+
+            def on_error(exc: Exception) -> None:
+                self.events.put(
+                    ErrorOutcome(
+                        title="环境安装失败",
+                        info=failure_info_from_command(
+                            chunks, exc, fallback_stage="安装运行环境"
+                        ),
+                    )
+                )
+
+            run_in_background(run, on_cancel=on_cancel, on_error=on_error)
+
+        return worker
